@@ -16,25 +16,25 @@ A Model Context Protocol (MCP) server that connects to Domo API.
 
 ## Setup
 
-1. Clone this repository
-2. Create and activate a virtual environment (recommended):
+1. Add this server as an MCP server in VS Code
+   ```json
+   {
+     "name": "Domo MCP Server",
+     "type": "stdio",
+     "command": "python",
+     "args": ["-m", "domo_mcp"],
+     "env": {
+       "PYTHONPATH": "${workspaceFolder}",
+       "DOMO_DEVELOPER_TOKEN": "<your_domo_developer_token>",
+       "DOMO_HOST": "<your_domo_host eg. instance-name.domo.com>"
+     }
+   }
    ```
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+2. Install the required packages:
+   ```bash
+   pip install -r requirements.txt
    ```
-3. Install dependencies:
-   ```
-   pip install -r mcp requests dotenv
-   ```
-4. Create a `.env` file in the root directory with the following variables:
-   ```
-   DOMO_HOST=your-domo-instance.domo.com
-   DOMO_DEVELOPER_TOKEN=your-personal-access-token
-   ```
-5. Test your connection (optional but recommended):
-   ```
-   python test_connection.py
-   ```
+3. Ensure the server is running
 
 ### Obtaining a Domo Developer Token
 
