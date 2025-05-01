@@ -40,6 +40,19 @@ class GetDatasetSchema(ToolModel):
     """Get a Domo dataset schema."""
     dataset_id: str = Field(description="The ID of the dataset to get the schema for.")
 
+class GetDatasetMetadata(ToolModel):
+    """Get metadata for a Domo dataset."""
+    dataset_id: str = Field(description="The ID of the dataset to get metadata for.")
+
+class QueryDataset(ToolModel):
+    """Query a Domo dataset using SQL."""
+    dataset_id: str = Field(description="The ID of the dataset to query.")
+    sql: str = Field(description="The SQL query to execute on the dataset.")
+
+class SearchDatasets(ToolModel):
+    """Search for datasets in a Domo instance by name."""
+    query: str = Field(description="The search query to find datasets by name.")
+
 
 @server.list_prompts()
 async def handle_list_prompts() -> list[types.Prompt]:
@@ -53,9 +66,11 @@ async def handle_list_resources() -> list[types.Resource]:
 async def handle_list_tools() -> list[types.Tool]:
     """List available tools."""
     logger.info("Listing available tools")
-    # await server.request_context.session.send_notification("are you recieving this notification?")
     tools = [
         GetDatasetSchema.as_tool(),
+        GetDatasetMetadata.as_tool(),
+        QueryDataset.as_tool(),
+        SearchDatasets.as_tool(),
     ]
     logger.info(f"Available tools: {[tool.name for tool in tools]}")
     return tools
@@ -69,12 +84,43 @@ async def handle_call_tool(
     assert name[:4] == "Domo", f"Unknown tool: {name}"
     try:
         match name[4:]:
-            case "GetDatasetSchema":
+            case "GetDatasetSchema": 
                 logger.info(f"Performing search with arguments: {arguments}")
                 search_results = await domo_client.get_dataset_schema(
                     dataset_id=arguments["dataset_id"]
                 )
                 logger.info("Schema fetched successfully.")
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps(search_results, indent=2)
+                )]
+            case "GetDatasetMetadata":
+                logger.info(f"Fetching metadata with arguments: {arguments}")
+                metadata = await domo_client.get_dataset_metadata(
+                    dataset_id=arguments["dataset_id"]
+                )
+                logger.info("Metadata fetched successfully.")
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps(metadata, indent=2)
+                )]
+            case "QueryDataset":
+                logger.info(f"Executing query with arguments: {arguments}")
+                query_results = await domo_client.query_dataset(
+                    dataset_id=arguments["dataset_id"],
+                    sql=arguments["sql"]
+                )
+                logger.info("Query executed successfully.")
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps(query_results, indent=2)
+                )]
+            case "SearchDatasets":
+                logger.info(f"Searching datasets with arguments: {arguments}")
+                search_results = await domo_client.search_datasets(
+                    query=arguments["query"]
+                )
+                logger.info("Datasets searched successfully.")
                 return [types.TextContent(
                     type="text",
                     text=json.dumps(search_results, indent=2)
