@@ -1,0 +1,11 @@
+# Exclude Python cache files
+__pycache__/
+*.py[oc]
+
+# Exclude virtual environments
+.venv
+.env
+
+# Exclude Docker-related files
+Dockerfile
+docker-compose.yml
