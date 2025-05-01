@@ -37,7 +37,7 @@ A Model Context Protocol (MCP) server that connects to Domo API.
      "env": {
        "PYTHONPATH": "${workspaceFolder}",
        "DOMO_DEVELOPER_TOKEN": "<your_domo_developer_token>",
-       "DOMO_HOST": "<your_domo_host eg. instance-name.domo.com>"
+       "DOMO_HOST": "<instance-name.domo.com>"
      }
    }
    ```
