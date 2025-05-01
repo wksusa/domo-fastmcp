@@ -16,6 +16,7 @@ A Model Context Protocol (MCP) server that connects to Domo API.
 
 ## Setup
 
+1. Clone this repository
 1. Add this server as an MCP server in VS Code
    ```json
    {
@@ -30,11 +31,11 @@ A Model Context Protocol (MCP) server that connects to Domo API.
      }
    }
    ```
-2. Install the required packages:
+1. Install the required packages:
    ```bash
    pip install -r requirements.txt
    ```
-3. Ensure the server is running
+1. Ensure the server is running
 
 ### Obtaining a Domo Developer Token
 
