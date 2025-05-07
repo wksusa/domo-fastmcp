@@ -53,6 +53,24 @@ class SearchDatasets(ToolModel):
     """Search for datasets in a Domo instance by name."""
     query: str = Field(description="The search query to find datasets by name.")
 
+class ListRoles(ToolModel):
+    """List all roles in the Domo instance."""
+    pass
+
+class RoleData(BaseModel):
+    """Model for role data as expected by the API."""
+    name: str = Field(description="The name of the role.")
+    description: Optional[str] = Field(default=None, description="A description of the role.")
+    fromRoleId: int = Field(description="The role ID to copy from.")
+
+class CreateRole(ToolModel):
+    """Create a new role in the Domo instance."""
+    role_data: RoleData = Field(description="The data for the role to create.")
+
+class ListRoleAuthorities(ToolModel):
+    """List authorities for a specific role in the Domo instance."""
+    role_id: int = Field(description="The ID of the role to list authorities for.")
+
 
 @server.list_prompts()
 async def handle_list_prompts() -> list[types.Prompt]:
@@ -71,6 +89,9 @@ async def handle_list_tools() -> list[types.Tool]:
         GetDatasetMetadata.as_tool(),
         QueryDataset.as_tool(),
         SearchDatasets.as_tool(),
+        ListRoles.as_tool(),
+        CreateRole.as_tool(),
+        ListRoleAuthorities.as_tool(),  # New tool added here
     ]
     logger.info(f"Available tools: {[tool.name for tool in tools]}")
     return tools
@@ -124,6 +145,34 @@ async def handle_call_tool(
                 return [types.TextContent(
                     type="text",
                     text=json.dumps(search_results, indent=2)
+                )]
+            case "ListRoles":
+                logger.info(f"Listing roles with arguments: {arguments}")
+                roles = await domo_client.list_roles()
+                logger.info("Roles listed successfully.")
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps(roles, indent=2)
+                )]
+            case "CreateRole":
+                logger.info(f"Creating role with arguments: {arguments}")
+                created_role = await domo_client.create_role(
+                    role_data=arguments["role_data"]
+                )
+                logger.info("Role created successfully.")
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps(created_role, indent=2)
+                )]
+            case "ListRoleAuthorities":
+                logger.info(f"Listing authorities for role with arguments: {arguments}")
+                result = await domo_client.list_role_authorities(
+                    role_id=arguments["role_id"]
+                )
+                logger.info("Authorities listed successfully.")
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps(result, indent=2)
                 )]
             case _:
                 error_msg = f"Unknown tool: {name}"
