@@ -2,38 +2,73 @@
 
 A Model Context Protocol (MCP) server that connects to Domo API.
 
-## Features
+## Tools
 
-- Get metadata about Domo DataSets
 - Run SQL queries on Domo DataSets
+- Search for DataSets by name
+- Get the metadata of Domo DataSets
+- Get the schema of Domo DataSets
 
 ## Prerequisites
 
-- Python 3.11+
+- Python 3.11+ OR Docker
+- Visual Studio Code
 - Domo instance with:
   - Developer access token
   - Access to datasets to query
 
 ## Setup
 
+### Local Python Setup
+
 1. Clone this repository
-2. Create and activate a virtual environment (recommended):
+1. Navigate to the cloned directory
+1. Install the required packages:
+   ```bash
+   pip install -r requirements.txt
    ```
-   python -m venv .venv
-   source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+1. Add configuration to your VS Code settings:
+   ```json
+   {
+     "name": "Domo MCP Server",
+     "type": "stdio",
+     "command": "python",
+     "args": ["-m", "domo_mcp"],
+     "env": {
+       "PYTHONPATH": "${workspaceFolder}",
+       "DOMO_DEVELOPER_TOKEN": "<your_domo_developer_token>",
+       "DOMO_HOST": "<instance-name.domo.com>"
+     }
+   }
    ```
-3. Install dependencies:
+1. Ensure the server is running
+
+### Local Docker Setup
+
+1. Clone this repository
+1. Navigate to the cloned directory
+1. Build the Docker image:
+   ```bash
+    docker build -t domo-mcp-server .
    ```
-   pip install -r mcp requests dotenv
-   ```
-4. Create a `.env` file in the root directory with the following variables:
-   ```
-   DOMO_HOST=your-domo-instance.domo.com
-   DOMO_DEVELOPER_TOKEN=your-personal-access-token
-   ```
-5. Test your connection (optional but recommended):
-   ```
-   python test_connection.py
+1. Add configuration to your VS Code settings:
+   ```json
+      "domo-mcp": {
+        "command": "docker",
+        "args": [
+          "run",
+          "-i",
+          "-e",
+          "DOMO_DEVELOPER_TOKEN",
+          "-e",
+          "DOMO_HOST",
+          "domo-mcp-server"
+        ],
+        "env": {
+          "DOMO_DEVELOPER_TOKEN": "<domo_developer_token>",
+          "DOMO_HOST": "<instance-name.domo.com>"
+        }
+      }
    ```
 
 ### Obtaining a Domo Developer Token
