@@ -38,6 +38,8 @@ class DomoClient:
                 response = requests.get(full_url, headers=headers)
             elif method.upper() == "POST":
                 response = requests.post(full_url, headers=headers, json=data)
+            elif method.upper() == "DELETE":
+                response = requests.delete(full_url, headers=headers)
             else:
                 raise ValueError(f"Unsupported HTTP method: {method}")
 
@@ -126,3 +128,48 @@ class DomoClient:
         except Exception as e:
             self.logger.error(f"Error searching datasets: {str(e)}")
             return f"Error searching datasets: {str(e)}"
+
+    async def list_roles(self) -> str:
+        """List all roles in the Domo instance."""
+        try:
+            url = "/authorization/v1/roles"
+            data = await self.make_request(url, "GET")
+
+            if not data:
+                self.logger.warning("No data returned for role list.")
+                return "Unable to fetch role list."
+
+            return data
+        except Exception as e:
+            self.logger.error(f"Error fetching role list: {str(e)}")
+            return f"Error fetching role list: {str(e)}"
+
+    async def create_role(self, role_data: dict) -> str:
+        """Create a new role in the Domo instance."""
+        try:
+            url = "/authorization/v1/roles"
+            data = await self.make_request(url, "POST", data=role_data)
+
+            if not data:
+                self.logger.warning("No data returned for role creation.")
+                return "Unable to create role."
+
+            return data
+        except Exception as e:
+            self.logger.error(f"Error creating role: {str(e)}")
+            return f"Error creating role: {str(e)}"
+        
+    async def list_role_authorities(self, role_id: str) -> str:
+        """List all authorities for a given role."""
+        try:
+            url = f"/authorization/v1/roles/{role_id}/authorities"
+            data = await self.make_request(url, "GET")
+
+            if not data:
+                self.logger.warning("No data returned for role authorities.")
+                return "Unable to fetch role authorities."
+
+            return data
+        except Exception as e:
+            self.logger.error(f"Error fetching role authorities: {str(e)}")
+            return f"Error fetching role authorities: {str(e)}"
