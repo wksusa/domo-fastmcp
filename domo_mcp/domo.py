@@ -16,6 +16,7 @@ DOMO_API_BASE = f"https://{DOMO_HOST}/api"
 
 app = Server("domo-mcp-server")
 
+
 class DomoClient:
     def __init__(self, logger: logging.Logger):
         """Initialize the DomoClient with environment variables and constants."""
@@ -24,11 +25,13 @@ class DomoClient:
         self.DOMO_API_BASE = f"https://{self.DOMO_HOST}/api"
         self.logger = logger
 
-    async def make_request(self, url: str, method: str, data: dict = None) -> dict[str, Any] | None:
+    async def make_request(
+        self, url: str, method: str, data: dict = None
+    ) -> dict[str, Any] | None:
         """Make a request to the Domo API with proper error handling."""
         headers = {
             "X-DOMO-Developer-Token": self.DOMO_DEVELOPER_TOKEN,
-            "Accept": "application/json"
+            "Accept": "application/json",
         }
 
         full_url = f"{self.DOMO_API_BASE}{url}"
@@ -103,19 +106,21 @@ class DomoClient:
             url = "/data/ui/v3/datasources/search"
             payload = {
                 "entities": ["DATASET"],
-                "filters": [{
-                    "field": "name_sort",
-                    "filterType": "wildcard",
-                    "query": f"*{query}*",
-                }],
+                "filters": [
+                    {
+                        "field": "name_sort",
+                        "filterType": "wildcard",
+                        "query": f"*{query}*",
+                    }
+                ],
                 "combineResults": True,
                 "query": "*",
                 "count": 1,
                 "offset": 0,
                 "sort": {
                     "isRelevance": False,
-                    "fieldSorts": [{"field": "create_date", "sortOrder": "DESC"}]
-                }
+                    "fieldSorts": [{"field": "create_date", "sortOrder": "DESC"}],
+                },
             }
             data = await self.make_request(url, "POST", data=payload)
 
@@ -123,7 +128,10 @@ class DomoClient:
                 self.logger.warning("No data returned for dataset search.")
                 return "Unable to search datasets."
 
-            datasets = [{"id": ds["id"], "name": ds["name"]} for ds in data.get("dataSources", [])]
+            datasets = [
+                {"id": ds["id"], "name": ds["name"]}
+                for ds in data.get("dataSources", [])
+            ]
             return datasets
         except Exception as e:
             self.logger.error(f"Error searching datasets: {str(e)}")
@@ -158,7 +166,7 @@ class DomoClient:
         except Exception as e:
             self.logger.error(f"Error creating role: {str(e)}")
             return f"Error creating role: {str(e)}"
-        
+
     async def list_role_authorities(self, role_id: str) -> str:
         """List all authorities for a given role."""
         try:
