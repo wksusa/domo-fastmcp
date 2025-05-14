@@ -97,6 +97,9 @@ The following MCP tools are available:
 2. **get_dataset_schema(dataset_id: str)** - Get the schema for a DataSet
 3. **query_dataset(dataset_id: str, query: str)** - Query a DataSet with SQL
 4. **search_datasets(query: str)** - Search for a DataSet by name to get its id
+5. **list_roles()** - List all roles in the Domo instance
+6. **create_role(name: str, from_role_id: int, description: Optional[str])** - Create a new role in the Domo instance
+7. **list_role_authorities(role_id: int)** - List authorities for a specific role in the Domo instance
 
 ## Example Usage with LLMs
 
