@@ -45,6 +45,40 @@ A Model Context Protocol (MCP) server that connects to Domo API.
 
 ### Local Docker Setup
 
+#### Option 1: Using Docker Compose (Recommended)
+
+1. Clone this repository
+1. Navigate to the cloned directory
+1. Create a `.env` file with your Domo credentials:
+   ```
+   DOMO_DEVELOPER_TOKEN=<your_domo_developer_token>
+   DOMO_HOST=<instance-name.domo.com>
+   ```
+1. Build and run with Docker Compose:
+   ```bash
+   docker-compose build
+   docker-compose run domo-mcp-server
+   ```
+1. For VS Code MCP configuration, use:
+   ```json
+   {
+     "domo-mcp": {
+       "command": "docker-compose",
+       "args": [
+         "run",
+         "--rm",
+         "domo-mcp-server"
+       ],
+       "env": {
+         "DOMO_DEVELOPER_TOKEN": "<domo_developer_token>",
+         "DOMO_HOST": "<instance-name.domo.com>"
+       }
+     }
+   }
+   ```
+
+#### Option 2: Using Docker directly
+
 1. Clone this repository
 1. Navigate to the cloned directory
 1. Build the Docker image:

@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  domo-mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: domo-mcp-server
+    stdin_open: true
+    tty: true
+    environment:
+      - DOMO_DEVELOPER_TOKEN=${DOMO_DEVELOPER_TOKEN}
+      - DOMO_HOST=${DOMO_HOST}
+    # The MCP server communicates via stdio, so we keep stdin_open and tty enabled
+    # No ports are exposed as this is a stdio-based service
+
