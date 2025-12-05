@@ -8,6 +8,7 @@ services:
     image: domo-mcp-server
     stdin_open: true
     tty: true
+    restart: "no"  # Prevent auto-restart to avoid multiple instances
     environment:
       - DOMO_DEVELOPER_TOKEN=${DOMO_DEVELOPER_TOKEN}
       - DOMO_HOST=${DOMO_HOST}

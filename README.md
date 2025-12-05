@@ -57,8 +57,9 @@ A Model Context Protocol (MCP) server that connects to Domo API.
 1. Build and run with Docker Compose:
    ```bash
    docker-compose build
-   docker-compose run domo-mcp-server
+   docker-compose run --rm domo-mcp-server
    ```
+   **Note:** The `--rm` flag ensures containers are automatically removed when they stop, preventing multiple instances from accumulating.
 1. For VS Code MCP configuration, use:
    ```json
    {
@@ -144,6 +145,24 @@ When used with LLMs that support the MCP protocol, this server enables natural l
 - "Show me the logs for the last 3 hours in my Activity Log dataset."
 
 ## Troubleshooting
+
+### Multiple Docker Instances
+
+If you notice multiple Docker containers running, you can clean them up:
+
+```bash
+# Use the cleanup script (recommended)
+./cleanup-docker.sh
+
+# Or manually clean up
+docker-compose down --remove-orphans
+docker ps -a --filter "name=domo-mcp-server" --format "{{.ID}}" | xargs -r docker rm -f
+```
+
+**Best practices to prevent multiple instances:**
+- Always use `docker-compose run --rm` instead of `docker-compose up` for one-off runs
+- Run the cleanup script before starting a new instance if you're unsure
+- The `--rm` flag in VS Code MCP configuration automatically removes containers when they stop
 
 ### Connection Issues
 
