@@ -1,20 +1,14 @@
+"""Domo API client for interacting with Domo's REST API."""
+
 import logging
 import os
 from typing import Any
+
 import requests
 from dotenv import load_dotenv
-from mcp.server import Server
 
 # Load environment variables
 load_dotenv()
-
-# Get Domo credentials from environment variables
-DOMO_HOST = os.getenv("DOMO_HOST")
-DOMO_DEVELOPER_TOKEN = os.getenv("DOMO_DEVELOPER_TOKEN")
-# Constants
-DOMO_API_BASE = f"https://{DOMO_HOST}/api"
-
-app = Server("domo-mcp-server")
 
 
 class DomoClient:
