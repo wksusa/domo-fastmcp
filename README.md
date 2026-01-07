@@ -106,6 +106,36 @@ A Model Context Protocol (MCP) server that connects to Domo API.
       }
    ```
 
+### Vercel Deployment (Remote MCP Server)
+
+Deploy as a serverless MCP server on Vercel:
+
+1. Fork/clone this repository
+2. Install Vercel CLI: `npm i -g vercel`
+3. Link to your Vercel project: `vercel link`
+4. Set environment variables in Vercel:
+   ```bash
+   vercel env add DOMO_HOST
+   vercel env add DOMO_DEVELOPER_TOKEN
+   ```
+5. Deploy:
+   ```bash
+   vercel deploy --prod
+   ```
+
+Your MCP server will be available at `https://your-project.vercel.app/mcp`
+
+**Client Configuration (Claude Desktop, Cursor, etc.):**
+```json
+{
+  "mcpServers": {
+    "domo": {
+      "url": "https://your-project.vercel.app/mcp"
+    }
+  }
+}
+```
+
 ### Obtaining a Domo Developer Token
 
 [Follow these steps](https://domo-support.domo.com/s/article/360042934494?language=en_US) to generate an access token.

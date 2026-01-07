@@ -1,0 +1,24 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "version": 2,
+  "builds": [
+    {
+      "src": "api/mcp.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/mcp/(.*)",
+      "dest": "/api/mcp.py"
+    },
+    {
+      "src": "/mcp",
+      "dest": "/api/mcp.py"
+    }
+  ],
+  "env": {
+    "DOMO_HOST": "@domo_host",
+    "DOMO_DEVELOPER_TOKEN": "@domo_developer_token"
+  }
+}
