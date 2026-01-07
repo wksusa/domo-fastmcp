@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time
 from typing import Any
 
 import requests
@@ -14,18 +15,50 @@ load_dotenv()
 class DomoClient:
     def __init__(self, logger: logging.Logger):
         """Initialize the DomoClient with environment variables and constants."""
-        self.DOMO_HOST = os.getenv("DOMO_HOST")
-        self.DOMO_DEVELOPER_TOKEN = os.getenv("DOMO_DEVELOPER_TOKEN")
-        self.DOMO_API_BASE = f"https://{self.DOMO_HOST}/api"
+        self.client_id = os.getenv("DOMO_CLIENT_ID")
+        self.client_secret = os.getenv("DOMO_CLIENT_SECRET")
+        self.api_host = os.getenv("DOMO_API_HOST", "api.domo.com")
+        self.DOMO_API_BASE = f"https://{self.api_host}"
         self.logger = logger
+        self._access_token = None
+        self._token_expires_at = 0
+
+    def _get_access_token(self) -> str:
+        """Get OAuth access token, refreshing if expired."""
+        # Return cached token if still valid (with 60s buffer)
+        if self._access_token and time.time() < (self._token_expires_at - 60):
+            return self._access_token
+
+        # Fetch new token
+        auth_url = f"{self.DOMO_API_BASE}/oauth/token"
+        params = {"grant_type": "client_credentials", "scope": "data"}
+
+        try:
+            response = requests.get(
+                auth_url,
+                params=params,
+                auth=(self.client_id, self.client_secret)
+            )
+            response.raise_for_status()
+            token_data = response.json()
+            self._access_token = token_data["access_token"]
+            # Token typically expires in 3600 seconds
+            self._token_expires_at = time.time() + token_data.get("expires_in", 3600)
+            self.logger.info("OAuth token refreshed successfully")
+            return self._access_token
+        except Exception as e:
+            self.logger.error(f"Failed to get OAuth token: {e}")
+            raise
 
     async def make_request(
         self, url: str, method: str, data: dict = None
     ) -> dict[str, Any] | None:
         """Make a request to the Domo API with proper error handling."""
+        token = self._get_access_token()
         headers = {
-            "X-DOMO-Developer-Token": self.DOMO_DEVELOPER_TOKEN,
+            "Authorization": f"Bearer {token}",
             "Accept": "application/json",
+            "Content-Type": "application/json",
         }
 
         full_url = f"{self.DOMO_API_BASE}{url}"

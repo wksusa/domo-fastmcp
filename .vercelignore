@@ -1,0 +1,9 @@
+.beads/
+.venv/
+.git/
+.env
+.env.local
+__pycache__/
+*.pyc
+.gitattributes
+AGENTS.md

@@ -1,24 +1,14 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
-  "builds": [
+  "rewrites": [
     {
-      "src": "api/mcp.py",
-      "use": "@vercel/python"
-    }
-  ],
-  "routes": [
-    {
-      "src": "/mcp/(.*)",
-      "dest": "/api/mcp.py"
+      "source": "/mcp/:path*",
+      "destination": "/api/mcp"
     },
     {
-      "src": "/mcp",
-      "dest": "/api/mcp.py"
+      "source": "/mcp",
+      "destination": "/api/mcp"
     }
-  ],
-  "env": {
-    "DOMO_HOST": "@domo_host",
-    "DOMO_DEVELOPER_TOKEN": "@domo_developer_token"
-  }
+  ]
 }
