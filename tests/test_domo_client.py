@@ -72,11 +72,12 @@ class TestDomoClientHeaders:
         client = DomoClient(mock_logger)
 
         mock_response = AsyncMock()
-        mock_response.json.return_value = {
+        # json() and raise_for_status() are synchronous in httpx
+        mock_response.json = lambda: {
             "access_token": "mock-access-token",
             "expires_in": 3600,
         }
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = lambda: None
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
@@ -102,9 +103,10 @@ class TestDomoClientRequests:
         client = DomoClient(mock_logger)
 
         mock_response = AsyncMock()
-        mock_response.json.return_value = sample_dataset_response
+        # json() and raise_for_status() are synchronous in httpx
+        mock_response.json = lambda: sample_dataset_response
         mock_response.content = b'{"id": "abc123"}'
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = lambda: None
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
@@ -123,9 +125,10 @@ class TestDomoClientRequests:
         client = DomoClient(mock_logger)
 
         mock_response = AsyncMock()
-        mock_response.json.return_value = {"success": True}
+        # json() and raise_for_status() are synchronous in httpx
+        mock_response.json = lambda: {"success": True}
         mock_response.content = b'{"success": true}'
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = lambda: None
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
@@ -167,7 +170,7 @@ class TestDomoClientRequests:
 
         mock_response = AsyncMock()
         mock_response.content = b""
-        mock_response.raise_for_status = AsyncMock()
+        mock_response.raise_for_status = lambda: None
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
