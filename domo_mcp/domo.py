@@ -17,8 +17,9 @@ class DomoClient:
         """Initialize the DomoClient with environment variables and constants."""
         self.client_id = os.getenv("DOMO_CLIENT_ID")
         self.client_secret = os.getenv("DOMO_CLIENT_SECRET")
-        self.api_host = os.getenv("DOMO_API_HOST", "api.domo.com")
-        self.DOMO_API_BASE = f"https://{self.api_host}"
+        # Domo's public API always uses api.domo.com for all calls
+        # The org-specific domain (e.g., wksusa.domo.com) is for UI only
+        self.DOMO_API_BASE = "https://api.domo.com"
         self.logger = logger
         self._access_token = None
         self._token_expires_at = 0
@@ -29,7 +30,7 @@ class DomoClient:
         if self._access_token and time.time() < (self._token_expires_at - 60):
             return self._access_token
 
-        # Fetch new token
+        # Fetch new token - always use api.domo.com for auth
         auth_url = f"{self.DOMO_API_BASE}/oauth/token"
         params = {"grant_type": "client_credentials", "scope": "data"}
 
@@ -130,36 +131,28 @@ class DomoClient:
     async def search_datasets(self, query: str) -> str:
         """Search for datasets in a Domo instance by name."""
         try:
-            url = "/data/ui/v3/datasources/search"
-            payload = {
-                "entities": ["DATASET"],
-                "filters": [
-                    {
-                        "field": "name_sort",
-                        "filterType": "wildcard",
-                        "query": f"*{query}*",
-                    }
-                ],
-                "combineResults": True,
-                "query": "*",
-                "count": 1,
-                "offset": 0,
-                "sort": {
-                    "isRelevance": False,
-                    "fieldSorts": [{"field": "create_date", "sortOrder": "DESC"}],
-                },
-            }
-            data = await self.make_request(url, "POST", data=payload)
+            # Domo's public API doesn't have a search endpoint, so we list datasets and filter
+            # Fetch multiple pages to search through more datasets (up to 500)
+            all_datasets = []
+            query_lower = query.lower()
 
-            if not data:
-                self.logger.warning("No data returned for dataset search.")
-                return "Unable to search datasets."
+            for offset in range(0, 500, 50):
+                url = f"/v1/datasets?limit=50&offset={offset}&sort=name"
+                data = await self.make_request(url, "GET")
+                if not data:
+                    break
 
-            datasets = [
-                {"id": ds["id"], "name": ds["name"]}
-                for ds in data.get("dataSources", [])
-            ]
-            return datasets
+                # Filter datasets that contain the query string (case-insensitive)
+                for ds in data:
+                    name = ds.get("name", "")
+                    if query_lower in name.lower():
+                        all_datasets.append({"id": ds.get("id"), "name": name})
+
+                # Stop if we got fewer than 50 results (end of list)
+                if len(data) < 50:
+                    break
+
+            return all_datasets
         except Exception as e:
             self.logger.error(f"Error searching datasets: {str(e)}")
             return f"Error searching datasets: {str(e)}"

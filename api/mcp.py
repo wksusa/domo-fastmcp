@@ -19,8 +19,9 @@ class DomoClient:
     def __init__(self):
         self.client_id = os.getenv("DOMO_CLIENT_ID")
         self.client_secret = os.getenv("DOMO_CLIENT_SECRET")
-        self.api_host = os.getenv("DOMO_API_HOST", "api.domo.com")
-        self.DOMO_API_BASE = f"https://{self.api_host}"
+        # Domo's public API always uses api.domo.com for all calls
+        # The org-specific domain (e.g., wksusa.domo.com) is for UI only
+        self.DOMO_API_BASE = "https://api.domo.com"
         self._access_token = None
         self._token_expires_at = 0
 
@@ -101,19 +102,28 @@ class DomoClient:
         return await self.make_request(f"/query/v1/execute/{dataset_id}", "POST", data={"sql": sql})
 
     async def search_datasets(self, query: str):
-        payload = {
-            "entities": ["DATASET"],
-            "filters": [{"field": "name_sort", "filterType": "wildcard", "query": f"*{query}*"}],
-            "combineResults": True,
-            "query": "*",
-            "count": 10,
-            "offset": 0,
-            "sort": {"isRelevance": False, "fieldSorts": [{"field": "create_date", "sortOrder": "DESC"}]},
-        }
-        data = await self.make_request("/data/ui/v3/datasources/search", "POST", data=payload)
-        if data:
-            return [{"id": ds["id"], "name": ds["name"]} for ds in data.get("dataSources", [])]
-        return []
+        # Domo's public API doesn't have a search endpoint, so we list datasets and filter
+        # Fetch multiple pages to search through more datasets (up to 500)
+        all_datasets = []
+        query_lower = query.lower()
+
+        for offset in range(0, 500, 50):
+            url = f"/v1/datasets?limit=50&offset={offset}&sort=name"
+            data = await self.make_request(url, "GET")
+            if not data:
+                break
+
+            # Filter datasets that contain the query string (case-insensitive)
+            for ds in data:
+                name = ds.get("name", "")
+                if query_lower in name.lower():
+                    all_datasets.append({"id": ds.get("id"), "name": name})
+
+            # Stop if we got fewer than 50 results (end of list)
+            if len(data) < 50:
+                break
+
+        return all_datasets
 
     async def list_roles(self):
         return await self.make_request("/authorization/v1/roles", "GET")
