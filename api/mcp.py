@@ -14,61 +14,76 @@ from starlette.middleware.cors import CORSMiddleware
 # ============================================================================
 # Domo API Client
 # ============================================================================
+#
+# Supports two authentication methods:
+#
+# 1. Developer Token (preferred for full API access):
+#    - Set DOMO_DEVELOPER_TOKEN and DOMO_HOST
+#    - Uses org-specific domain (e.g., wksusa.domo.com)
+#    - Access to internal UI APIs (search, etc.)
+#
+# 2. OAuth Client Credentials (fallback):
+#    - Set DOMO_CLIENT_ID and DOMO_CLIENT_SECRET
+#    - Uses api.domo.com for all calls
+#    - Limited to public API endpoints only
+# ============================================================================
 
 class DomoClient:
     def __init__(self):
+        # Developer Token auth (preferred - gives access to internal APIs)
+        self.developer_token = os.getenv("DOMO_DEVELOPER_TOKEN")
+        self.domo_host = os.getenv("DOMO_HOST", "").rstrip("/")
+
+        # OAuth auth (fallback - public API only)
         self.client_id = os.getenv("DOMO_CLIENT_ID")
         self.client_secret = os.getenv("DOMO_CLIENT_SECRET")
-        # Domo's public API always uses api.domo.com for all calls
-        # The org-specific domain (e.g., wksusa.domo.com) is for UI only
-        self.DOMO_API_BASE = "https://api.domo.com"
-        self._access_token = None
+
+        # Determine auth mode and API base
+        if self.developer_token and self.domo_host:
+            self.auth_mode = "developer_token"
+            self.DOMO_API_BASE = f"https://{self.domo_host}"
+        elif self.client_id and self.client_secret:
+            self.auth_mode = "oauth"
+            self.DOMO_API_BASE = "https://api.domo.com"
+        else:
+            raise ValueError(
+                "Missing Domo credentials. Set either:\n"
+                "  - DOMO_DEVELOPER_TOKEN + DOMO_HOST (for full API access), or\n"
+                "  - DOMO_CLIENT_ID + DOMO_CLIENT_SECRET (for public API only)"
+            )
+
+        self._oauth_token = None
         self._token_expires_at = 0
 
-    def _get_access_token(self) -> str:
-        """Get OAuth access token, refreshing if expired."""
-        if self._access_token and time.time() < (self._token_expires_at - 60):
-            return self._access_token
+    def _get_headers(self) -> dict:
+        """Get request headers based on auth mode."""
+        if self.auth_mode == "developer_token":
+            return {
+                "X-DOMO-Developer-Token": self.developer_token,
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
+        else:
+            # OAuth mode - get/refresh token
+            if not self._oauth_token or time.time() >= (self._token_expires_at - 60):
+                response = requests.post(
+                    "https://api.domo.com/oauth/token",
+                    params={"grant_type": "client_credentials", "scope": "data"},
+                    auth=(self.client_id, self.client_secret)
+                )
+                response.raise_for_status()
+                token_data = response.json()
+                self._oauth_token = token_data["access_token"]
+                self._token_expires_at = time.time() + token_data.get("expires_in", 3600)
 
-        if not self.client_id or not self.client_secret:
-            raise ValueError(
-                f"Missing Domo credentials. DOMO_CLIENT_ID={'set' if self.client_id else 'missing'}, "
-                f"DOMO_CLIENT_SECRET={'set' if self.client_secret else 'missing'}"
-            )
-
-        # OAuth always uses api.domo.com regardless of instance host
-        auth_url = "https://api.domo.com/oauth/token"
-
-        # Domo OAuth requires POST with params in query string
-        response = requests.post(
-            auth_url,
-            params={"grant_type": "client_credentials", "scope": "data"},
-            auth=(self.client_id, self.client_secret)
-        )
-
-        if not response.ok:
-            raise ValueError(
-                f"Domo OAuth failed: {response.status_code} - {response.text[:500]}"
-            )
-
-        try:
-            token_data = response.json()
-        except json.JSONDecodeError as e:
-            raise ValueError(
-                f"Domo OAuth returned invalid JSON: {response.text[:500]}"
-            ) from e
-
-        self._access_token = token_data["access_token"]
-        self._token_expires_at = time.time() + token_data.get("expires_in", 3600)
-        return self._access_token
+            return {
+                "Authorization": f"Bearer {self._oauth_token}",
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+            }
 
     async def make_request(self, url: str, method: str, data: dict = None) -> dict[str, Any] | None:
-        token = self._get_access_token()
-        headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        }
+        headers = self._get_headers()
         full_url = f"{self.DOMO_API_BASE}{url}"
 
         if method.upper() == "GET":
@@ -102,28 +117,41 @@ class DomoClient:
         return await self.make_request(f"/query/v1/execute/{dataset_id}", "POST", data={"sql": sql})
 
     async def search_datasets(self, query: str):
-        # Domo's public API doesn't have a search endpoint, so we list datasets and filter
-        # Fetch multiple pages to search through more datasets (up to 500)
-        all_datasets = []
-        query_lower = query.lower()
+        if self.auth_mode == "developer_token":
+            # Developer Token mode: use internal UI search API (efficient, server-side)
+            payload = {
+                "entities": ["DATASET"],
+                "filters": [{"field": "name_sort", "filterType": "wildcard", "query": f"*{query}*"}],
+                "combineResults": True,
+                "query": "*",
+                "count": 50,
+                "offset": 0,
+                "sort": {"isRelevance": False, "fieldSorts": [{"field": "create_date", "sortOrder": "DESC"}]},
+            }
+            data = await self.make_request("/data/ui/v3/datasources/search", "POST", data=payload)
+            if data:
+                return [{"id": ds["id"], "name": ds["name"]} for ds in data.get("dataSources", [])]
+            return []
+        else:
+            # OAuth mode: public API doesn't have search, so list and filter client-side
+            all_datasets = []
+            query_lower = query.lower()
 
-        for offset in range(0, 500, 50):
-            url = f"/v1/datasets?limit=50&offset={offset}&sort=name"
-            data = await self.make_request(url, "GET")
-            if not data:
-                break
+            for offset in range(0, 500, 50):
+                url = f"/v1/datasets?limit=50&offset={offset}&sort=name"
+                data = await self.make_request(url, "GET")
+                if not data:
+                    break
 
-            # Filter datasets that contain the query string (case-insensitive)
-            for ds in data:
-                name = ds.get("name", "")
-                if query_lower in name.lower():
-                    all_datasets.append({"id": ds.get("id"), "name": name})
+                for ds in data:
+                    name = ds.get("name", "")
+                    if query_lower in name.lower():
+                        all_datasets.append({"id": ds.get("id"), "name": name})
 
-            # Stop if we got fewer than 50 results (end of list)
-            if len(data) < 50:
-                break
+                if len(data) < 50:
+                    break
 
-        return all_datasets
+            return all_datasets
 
     async def list_roles(self):
         return await self.make_request("/authorization/v1/roles", "GET")
