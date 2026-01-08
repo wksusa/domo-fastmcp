@@ -203,5 +203,6 @@ middleware = [
 ]
 
 # Create the ASGI app at module level
-# Use path that matches Vercel routing
-app = mcp.http_app(path="/api/mcp", middleware=middleware, stateless_http=True)
+# Vercel mounts this file at /api/mcp, so use "/" as the path
+# The MCP endpoint will be at /api/mcp (handled by Vercel routing)
+app = mcp.http_app(path="/", middleware=middleware, stateless_http=True)
