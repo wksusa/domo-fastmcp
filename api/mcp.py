@@ -36,11 +36,11 @@ class DomoClient:
             )
 
         auth_url = f"{self.DOMO_API_BASE}/oauth/token"
-        params = {"grant_type": "client_credentials", "scope": "data"}
 
-        response = requests.get(
+        # Domo OAuth requires POST with params in query string
+        response = requests.post(
             auth_url,
-            params=params,
+            params={"grant_type": "client_credentials", "scope": "data"},
             auth=(self.client_id, self.client_secret)
         )
 
