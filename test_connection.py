@@ -36,20 +36,20 @@ def check_env_vars():
 
 def test_domo_api():
     """Test connection to Domo API"""
-    import requests
-    
+    import httpx
+
     print("\nTesting Domo API connection...")
-    
+
     try:
         headers = {
             "X-DOMO-Developer-Token": DOMO_DEVELOPER_TOKEN,
             "Content-Type": "application/json"
         }
-        
+
         url = f"https://{DOMO_HOST}/api/content/v2/groups/grouplist?limit=1"
-        
-        response = requests.get(url, headers=headers)
-        
+
+        response = httpx.get(url, headers=headers)
+
         if response.status_code == 200:
             print("✅ Successfully connected to Domo API")
             return True
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     
     # Check for dependencies
     try:
-        import requests
+        import httpx
     except ImportError as e:
         print(f"❌ Missing dependency: {str(e)}")
         print("Please run: pip install -r requirements.txt")

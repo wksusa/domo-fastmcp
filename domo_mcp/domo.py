@@ -5,7 +5,7 @@ import os
 import time
 from typing import Any
 
-import requests
+import httpx
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -61,7 +61,7 @@ class DomoClient:
         self._oauth_token = None
         self._token_expires_at = 0
 
-    def _get_headers(self) -> dict:
+    async def _get_headers(self) -> dict:
         """Get request headers based on auth mode."""
         if self.auth_mode == "developer_token":
             return {
@@ -72,16 +72,17 @@ class DomoClient:
         else:
             # OAuth mode - get/refresh token
             if not self._oauth_token or time.time() >= (self._token_expires_at - 60):
-                response = requests.post(
-                    "https://api.domo.com/oauth/token",
-                    params={"grant_type": "client_credentials", "scope": "data"},
-                    auth=(self.client_id, self.client_secret)
-                )
-                response.raise_for_status()
-                token_data = response.json()
-                self._oauth_token = token_data["access_token"]
-                self._token_expires_at = time.time() + token_data.get("expires_in", 3600)
-                self.logger.info("OAuth token refreshed successfully")
+                async with httpx.AsyncClient() as client:
+                    response = await client.post(
+                        "https://api.domo.com/oauth/token",
+                        params={"grant_type": "client_credentials", "scope": "data"},
+                        auth=(self.client_id, self.client_secret)
+                    )
+                    response.raise_for_status()
+                    token_data = response.json()
+                    self._oauth_token = token_data["access_token"]
+                    self._token_expires_at = time.time() + token_data.get("expires_in", 3600)
+                    self.logger.info("OAuth token refreshed successfully")
 
             return {
                 "Authorization": f"Bearer {self._oauth_token}",
@@ -93,28 +94,32 @@ class DomoClient:
         self, url: str, method: str, data: dict = None
     ) -> dict[str, Any] | None:
         """Make a request to the Domo API with proper error handling."""
-        headers = self._get_headers()
+        headers = await self._get_headers()
         full_url = f"{self.DOMO_API_BASE}{url}"
 
         try:
-            if method.upper() == "GET":
-                response = requests.get(full_url, headers=headers)
-            elif method.upper() == "POST":
-                response = requests.post(full_url, headers=headers, json=data)
-            elif method.upper() == "DELETE":
-                response = requests.delete(full_url, headers=headers)
-            else:
-                raise ValueError(f"Unsupported HTTP method: {method}")
+            async with httpx.AsyncClient() as client:
+                if method.upper() == "GET":
+                    response = await client.get(full_url, headers=headers)
+                elif method.upper() == "POST":
+                    response = await client.post(full_url, headers=headers, json=data)
+                elif method.upper() == "DELETE":
+                    response = await client.delete(full_url, headers=headers)
+                else:
+                    raise ValueError(f"Unsupported HTTP method: {method}")
 
-            response.raise_for_status()
+                response.raise_for_status()
 
-            # Handle empty responses
-            if not response.content:
-                return None
+                # Handle empty responses
+                if not response.content:
+                    return None
 
-            return response.json()
-        except requests.exceptions.RequestException as e:
+                return response.json()
+        except httpx.HTTPStatusError as e:
             self.logger.error(f"HTTP request failed: {e}")
+            return None
+        except httpx.RequestError as e:
+            self.logger.error(f"Request error: {e}")
             return None
         except Exception as e:
             self.logger.error(f"Unexpected error: {e}")
