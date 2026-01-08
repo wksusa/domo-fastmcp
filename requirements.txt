@@ -1,4 +1,4 @@
 # Requirements for the Domo MCP Server
-requests
-python-dotenv
-fastmcp<3
+requests>=2.28.0
+python-dotenv>=1.0.0
+fastmcp>=2.0.0,<3

@@ -8,6 +8,7 @@ from fastmcp import FastMCP
 from pydantic import BaseModel, Field
 
 from .domo import DomoClient
+from .logger import Logger
 
 
 # Initialize FastMCP server
@@ -17,21 +18,6 @@ mcp = FastMCP(
     search for datasets, get schema information, and manage roles. Always use the
     appropriate tool based on what the user is asking for."""
 )
-
-
-# Simple logger that writes to stderr (for MCP compatibility)
-class Logger:
-    def info(self, message):
-        import sys
-        print(f"[INFO] {message}", file=sys.stderr)
-
-    def warning(self, message):
-        import sys
-        print(f"[WARNING] {message}", file=sys.stderr)
-
-    def error(self, message):
-        import sys
-        print(f"[ERROR] {message}", file=sys.stderr)
 
 
 logger = Logger()

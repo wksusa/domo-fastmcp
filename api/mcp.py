@@ -1,7 +1,6 @@
 """Vercel serverless function endpoint for Domo MCP server."""
 
 import json
-import sys
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -9,18 +8,7 @@ from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
 from domo_mcp.domo import DomoClient
-
-
-# Simple logger for Vercel environment (writes to stderr)
-class Logger:
-    def info(self, message):
-        print(f"[INFO] {message}", file=sys.stderr)
-
-    def warning(self, message):
-        print(f"[WARNING] {message}", file=sys.stderr)
-
-    def error(self, message):
-        print(f"[ERROR] {message}", file=sys.stderr)
+from domo_mcp.logger import Logger
 
 
 logger = Logger()
