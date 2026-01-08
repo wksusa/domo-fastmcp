@@ -1,14 +1,20 @@
 """Domo MCP Server - FastMCP implementation."""
 
 import json
-import os
 from typing import Optional
 
 from fastmcp import FastMCP
-from pydantic import BaseModel, Field
+from pydantic import ValidationError
 
 from .domo import DomoClient
 from .logger import Logger
+from .validation import (
+    CreateRoleInput,
+    DatasetId,
+    RoleId,
+    SearchQuery,
+    SqlQuery,
+)
 
 
 # Initialize FastMCP server
@@ -24,12 +30,11 @@ logger = Logger()
 domo_client = DomoClient(logger)
 
 
-# Pydantic model for role creation
-class RoleData(BaseModel):
-    """Data for creating a new role."""
-    name: str = Field(description="The name of the role.")
-    description: Optional[str] = Field(default=None, description="A description of the role.")
-    fromRoleId: int = Field(description="The role ID to copy permissions from.")
+def _validation_error_response(e: ValidationError) -> str:
+    """Format validation errors for user-friendly response."""
+    errors = e.errors()
+    messages = [f"{err['loc'][0]}: {err['msg']}" for err in errors]
+    return json.dumps({"error": "Validation failed", "details": messages}, indent=2)
 
 
 @mcp.tool()
@@ -42,8 +47,13 @@ async def get_dataset_schema(dataset_id: str) -> str:
     Returns:
         JSON string containing the dataset schema.
     """
-    logger.info(f"Getting schema for dataset: {dataset_id}")
-    result = await domo_client.get_dataset_schema(dataset_id=dataset_id)
+    try:
+        validated = DatasetId(dataset_id=dataset_id)
+    except ValidationError as e:
+        return _validation_error_response(e)
+
+    logger.info(f"Getting schema for dataset: {validated.dataset_id}")
+    result = await domo_client.get_dataset_schema(dataset_id=validated.dataset_id)
     logger.info("Schema fetched successfully.")
     return json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
 
@@ -58,8 +68,13 @@ async def get_dataset_metadata(dataset_id: str) -> str:
     Returns:
         JSON string containing the dataset metadata.
     """
-    logger.info(f"Getting metadata for dataset: {dataset_id}")
-    result = await domo_client.get_dataset_metadata(dataset_id=dataset_id)
+    try:
+        validated = DatasetId(dataset_id=dataset_id)
+    except ValidationError as e:
+        return _validation_error_response(e)
+
+    logger.info(f"Getting metadata for dataset: {validated.dataset_id}")
+    result = await domo_client.get_dataset_metadata(dataset_id=validated.dataset_id)
     logger.info("Metadata fetched successfully.")
     return json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
 
@@ -75,8 +90,16 @@ async def query_dataset(dataset_id: str, sql: str) -> str:
     Returns:
         JSON string containing the query results.
     """
-    logger.info(f"Querying dataset {dataset_id} with SQL: {sql}")
-    result = await domo_client.query_dataset(dataset_id=dataset_id, sql=sql)
+    try:
+        validated_id = DatasetId(dataset_id=dataset_id)
+        validated_sql = SqlQuery(sql=sql)
+    except ValidationError as e:
+        return _validation_error_response(e)
+
+    logger.info(f"Querying dataset {validated_id.dataset_id} with SQL: {validated_sql.sql}")
+    result = await domo_client.query_dataset(
+        dataset_id=validated_id.dataset_id, sql=validated_sql.sql
+    )
     logger.info("Query executed successfully.")
     return json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
 
@@ -91,8 +114,13 @@ async def search_datasets(query: str) -> str:
     Returns:
         JSON string containing matching datasets with their IDs and names.
     """
-    logger.info(f"Searching datasets with query: {query}")
-    result = await domo_client.search_datasets(query=query)
+    try:
+        validated = SearchQuery(query=query)
+    except ValidationError as e:
+        return _validation_error_response(e)
+
+    logger.info(f"Searching datasets with query: {validated.query}")
+    result = await domo_client.search_datasets(query=validated.query)
     logger.info("Datasets searched successfully.")
     return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
 
@@ -122,13 +150,20 @@ async def create_role(name: str, from_role_id: int, description: Optional[str] =
     Returns:
         JSON string containing the created role data.
     """
-    logger.info(f"Creating role: {name}")
+    try:
+        validated = CreateRoleInput(
+            name=name, from_role_id=from_role_id, description=description
+        )
+    except ValidationError as e:
+        return _validation_error_response(e)
+
+    logger.info(f"Creating role: {validated.name}")
     role_data = {
-        "name": name,
-        "fromRoleId": from_role_id,
+        "name": validated.name,
+        "fromRoleId": validated.from_role_id,
     }
-    if description:
-        role_data["description"] = description
+    if validated.description:
+        role_data["description"] = validated.description
 
     result = await domo_client.create_role(role_data=role_data)
     logger.info("Role created successfully.")
@@ -145,7 +180,12 @@ async def list_role_authorities(role_id: int) -> str:
     Returns:
         JSON string containing the role's authorities.
     """
-    logger.info(f"Listing authorities for role: {role_id}")
-    result = await domo_client.list_role_authorities(role_id=role_id)
+    try:
+        validated = RoleId(role_id=role_id)
+    except ValidationError as e:
+        return _validation_error_response(e)
+
+    logger.info(f"Listing authorities for role: {validated.role_id}")
+    result = await domo_client.list_role_authorities(role_id=validated.role_id)
     logger.info("Authorities listed successfully.")
     return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
