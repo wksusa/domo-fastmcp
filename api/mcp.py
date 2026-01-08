@@ -41,7 +41,7 @@ class DomoClient:
         # Determine auth mode and API base
         if self.developer_token and self.domo_host:
             self.auth_mode = "developer_token"
-            self.DOMO_API_BASE = f"https://{self.domo_host}"
+            self.DOMO_API_BASE = f"https://{self.domo_host}/api"
         elif self.client_id and self.client_secret:
             self.auth_mode = "oauth"
             self.DOMO_API_BASE = "https://api.domo.com"
