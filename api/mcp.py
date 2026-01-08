@@ -35,7 +35,8 @@ class DomoClient:
                 f"DOMO_CLIENT_SECRET={'set' if self.client_secret else 'missing'}"
             )
 
-        auth_url = f"{self.DOMO_API_BASE}/oauth/token"
+        # OAuth always uses api.domo.com regardless of instance host
+        auth_url = "https://api.domo.com/oauth/token"
 
         # Domo OAuth requires POST with params in query string
         response = requests.post(
