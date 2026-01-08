@@ -29,6 +29,12 @@ class DomoClient:
         if self._access_token and time.time() < (self._token_expires_at - 60):
             return self._access_token
 
+        if not self.client_id or not self.client_secret:
+            raise ValueError(
+                f"Missing Domo credentials. DOMO_CLIENT_ID={'set' if self.client_id else 'missing'}, "
+                f"DOMO_CLIENT_SECRET={'set' if self.client_secret else 'missing'}"
+            )
+
         auth_url = f"{self.DOMO_API_BASE}/oauth/token"
         params = {"grant_type": "client_credentials", "scope": "data"}
 
@@ -37,8 +43,19 @@ class DomoClient:
             params=params,
             auth=(self.client_id, self.client_secret)
         )
-        response.raise_for_status()
-        token_data = response.json()
+
+        if not response.ok:
+            raise ValueError(
+                f"Domo OAuth failed: {response.status_code} - {response.text[:500]}"
+            )
+
+        try:
+            token_data = response.json()
+        except json.JSONDecodeError as e:
+            raise ValueError(
+                f"Domo OAuth returned invalid JSON: {response.text[:500]}"
+            ) from e
+
         self._access_token = token_data["access_token"]
         self._token_expires_at = time.time() + token_data.get("expires_in", 3600)
         return self._access_token
@@ -62,7 +79,16 @@ class DomoClient:
             raise ValueError(f"Unsupported HTTP method: {method}")
 
         response.raise_for_status()
-        return response.json()
+
+        # Handle empty responses
+        if not response.content:
+            return None
+
+        # Try to parse JSON, return raw text if it fails
+        try:
+            return response.json()
+        except ValueError:
+            return {"raw_response": response.text}
 
     async def get_dataset_metadata(self, dataset_id: str):
         return await self.make_request(f"/data/v3/datasources/{dataset_id}?part=core", "GET")
