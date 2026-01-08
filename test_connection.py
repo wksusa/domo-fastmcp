@@ -61,8 +61,8 @@ def test_domo_api():
         return False
 
 if __name__ == "__main__":
-    print("Databricks Connection Test")
-    print("=========================\n")
+    print("Domo Connection Test")
+    print("====================\n")
     
     # Check for dependencies
     try:
