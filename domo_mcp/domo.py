@@ -29,10 +29,22 @@ load_dotenv()
 #    - Limited to public API endpoints only
 # ============================================================================
 
+# Configuration constants
+DEFAULT_TIMEOUT = 60.0  # seconds
+CONNECT_TIMEOUT = 10.0  # seconds
+MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10MB
+SLOW_REQUEST_THRESHOLD = 5.0  # seconds
+
 class DomoClient:
     def __init__(self, logger: logging.Logger):
         """Initialize the DomoClient with environment variables and constants."""
         self.logger = logger
+
+        # Configure timeouts
+        self.timeout = httpx.Timeout(
+            timeout=DEFAULT_TIMEOUT,
+            connect=CONNECT_TIMEOUT
+        )
 
         # Developer Token auth (preferred - gives access to internal APIs)
         self.developer_token = os.getenv("DOMO_DEVELOPER_TOKEN")
@@ -72,7 +84,7 @@ class DomoClient:
         else:
             # OAuth mode - get/refresh token
             if not self._oauth_token or time.time() >= (self._token_expires_at - 60):
-                async with httpx.AsyncClient() as client:
+                async with httpx.AsyncClient(timeout=self.timeout) as client:
                     response = await client.post(
                         "https://api.domo.com/oauth/token",
                         params={"grant_type": "client_credentials", "scope": "data"},
@@ -93,12 +105,13 @@ class DomoClient:
     async def make_request(
         self, url: str, method: str, data: dict = None
     ) -> dict[str, Any] | None:
-        """Make a request to the Domo API with proper error handling."""
+        """Make a request to the Domo API with proper error handling, timeout tracking, and response size limits."""
         headers = await self._get_headers()
         full_url = f"{self.DOMO_API_BASE}{url}"
+        start_time = time.time()
 
         try:
-            async with httpx.AsyncClient() as client:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
                 if method.upper() == "GET":
                     response = await client.get(full_url, headers=headers)
                 elif method.upper() == "POST":
@@ -108,21 +121,59 @@ class DomoClient:
                 else:
                     raise ValueError(f"Unsupported HTTP method: {method}")
 
+                # Calculate request duration
+                duration = time.time() - start_time
+
+                # Log slow requests
+                if duration > SLOW_REQUEST_THRESHOLD:
+                    self.logger.warning(
+                        f"Slow request detected: {method} {url} took {duration:.2f}s"
+                    )
+                else:
+                    self.logger.info(f"{method} {url} completed in {duration:.2f}s")
+
                 response.raise_for_status()
 
                 # Handle empty responses
                 if not response.content:
                     return None
 
+                # Check response size
+                response_size = len(response.content)
+                if response_size > MAX_RESPONSE_SIZE:
+                    self.logger.error(
+                        f"Response too large: {response_size} bytes exceeds limit of {MAX_RESPONSE_SIZE} bytes"
+                    )
+                    return None
+                elif response_size > MAX_RESPONSE_SIZE / 2:
+                    self.logger.warning(
+                        f"Large response: {response_size} bytes ({response_size / (1024*1024):.2f}MB)"
+                    )
+
                 return response.json()
+        except httpx.TimeoutException as e:
+            duration = time.time() - start_time
+            self.logger.error(
+                f"Request timeout after {duration:.2f}s: {method} {url} - {str(e)}"
+            )
+            return None
         except httpx.HTTPStatusError as e:
-            self.logger.error(f"HTTP request failed: {e}")
+            duration = time.time() - start_time
+            self.logger.error(
+                f"HTTP request failed after {duration:.2f}s: {method} {url} - {str(e)}"
+            )
             return None
         except httpx.RequestError as e:
-            self.logger.error(f"Request error: {e}")
+            duration = time.time() - start_time
+            self.logger.error(
+                f"Request error after {duration:.2f}s: {method} {url} - {str(e)}"
+            )
             return None
         except Exception as e:
-            self.logger.error(f"Unexpected error: {e}")
+            duration = time.time() - start_time
+            self.logger.error(
+                f"Unexpected error after {duration:.2f}s: {method} {url} - {str(e)}"
+            )
             return None
 
     async def get_dataset_metadata(self, dataset_id: str) -> str:
