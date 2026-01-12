@@ -15,9 +15,9 @@ uv.lock
 .vercel
 .env*.local
 
+# MCP config files (contain auth tokens)
 .mcp.json
 mcp.json
-
-.claude/
+.claude/mcp.json
 
 AGENTS.md
