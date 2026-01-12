@@ -19,7 +19,7 @@ from .validation import (
 
 # Initialize FastMCP server
 mcp = FastMCP(
-    name="domo-fastmcp",
+    name="domo_fastmcp",
     instructions="""You are connected to a Domo instance. You can query datasets,
     search for datasets, get schema information, and manage roles. Always use the
     appropriate tool based on what the user is asking for."""
