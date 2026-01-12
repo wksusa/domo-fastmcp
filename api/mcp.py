@@ -1,12 +1,14 @@
 """Vercel serverless function endpoint for Domo MCP server."""
 
 import json
+import os
 from typing import Optional
 
 from fastmcp import FastMCP
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
+from domo_mcp.auth import AuthMiddleware
 from domo_mcp.domo import DomoClient
 from domo_mcp.logger import Logger
 
@@ -91,6 +93,37 @@ middleware = [
     )
 ]
 
+
+def get_valid_tokens() -> list[str]:
+    """Load and validate authentication tokens from environment.
+
+    Returns:
+        List of valid Bearer tokens for authentication.
+        Empty list if MCP_AUTH_TOKENS is not set (authentication disabled).
+    """
+    tokens_str = os.getenv("MCP_AUTH_TOKENS", "")
+    if not tokens_str:
+        logger.warning("No MCP_AUTH_TOKENS set - authentication disabled!")
+        return []
+
+    tokens = [t.strip() for t in tokens_str.split(",") if t.strip()]
+    if not tokens:
+        logger.warning("MCP_AUTH_TOKENS is empty - authentication disabled!")
+        return []
+
+    return tokens
+
+
+# Parse valid tokens from environment
+valid_tokens = get_valid_tokens()
+
 # Create the ASGI app at module level
 # Use path that matches Vercel routing
 app = mcp.http_app(path="/api/mcp", middleware=middleware, stateless_http=True)
+
+# Wrap with authentication middleware if tokens are configured
+if valid_tokens:
+    app = AuthMiddleware(app, valid_tokens)
+    logger.info(f"Authentication enabled with {len(valid_tokens)} valid token(s)")
+else:
+    logger.warning("Authentication is DISABLED - all requests will be accepted")

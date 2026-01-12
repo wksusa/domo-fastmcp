@@ -55,13 +55,20 @@ Deploy as a serverless MCP server on Vercel using FastMCP:
 3. Link to your Vercel project: `vercel link`
 4. Set environment variables in Vercel:
    ```bash
+   # Domo API Credentials (choose one):
    # Option 1: Developer Token (recommended)
-   vercel env add DOMO_HOST
-   vercel env add DOMO_DEVELOPER_TOKEN
+   vercel env add DOMO_HOST production
+   vercel env add DOMO_DEVELOPER_TOKEN production
 
    # Option 2: OAuth
-   vercel env add DOMO_CLIENT_ID
-   vercel env add DOMO_CLIENT_SECRET
+   vercel env add DOMO_CLIENT_ID production
+   vercel env add DOMO_CLIENT_SECRET production
+
+   # MCP Server Authentication (recommended for production)
+   # Generate a secure token first:
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   # Then set it:
+   vercel env add MCP_AUTH_TOKENS production
    ```
 5. Deploy:
    ```bash
@@ -76,11 +83,16 @@ Your MCP server will be available at `https://your-project.vercel.app/api/mcp`
   "mcpServers": {
     "domo": {
       "type": "http",
-      "url": "https://your-project.vercel.app/api/mcp"
+      "url": "https://your-project.vercel.app/api/mcp",
+      "headers": {
+        "Authorization": "Bearer your-generated-token-here"
+      }
     }
   }
 }
 ```
+
+**Note:** If you don't set `MCP_AUTH_TOKENS`, authentication is disabled. See [Security & Authentication](#security--authentication) for more details.
 
 ### Local Python Setup
 
@@ -236,12 +248,83 @@ docker ps -a --filter "name=domo-mcp-server" --format "{{.ID}}" | xargs -r docke
 
 If using OAuth and not finding expected datasets, consider switching to Developer Token authentication.
 
-## Security Considerations
+## Security & Authentication
 
-- Your Domo credentials provide direct access to your instance
+### MCP Server Authentication (Vercel HTTP Endpoint)
+
+The Vercel HTTP endpoint supports Bearer token authentication to secure access to the MCP server. This prevents unauthorized users from calling your MCP tools.
+
+**Setting Up Authentication:**
+
+1. **Generate a secure token:**
+   ```bash
+   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+   ```
+
+2. **Set the token in Vercel:**
+   ```bash
+   vercel env add MCP_AUTH_TOKENS production
+   # Paste your generated token when prompted
+   ```
+
+3. **Update your MCP client configuration** to include the Authorization header:
+   ```json
+   {
+     "mcpServers": {
+       "domo": {
+         "type": "http",
+         "url": "https://your-project.vercel.app/api/mcp",
+         "headers": {
+           "Authorization": "Bearer your-token-here"
+         }
+       }
+     }
+   }
+   ```
+
+**Multiple Tokens (Zero-Downtime Rotation):**
+
+You can configure multiple tokens for different clients or for token rotation:
+
+```bash
+# In Vercel, set MCP_AUTH_TOKENS with comma-separated tokens
+MCP_AUTH_TOKENS=token1,token2,token3
+```
+
+To rotate tokens without downtime:
+1. Add new token to the list: `old_token,new_token`
+2. Deploy
+3. Update clients to use new token
+4. Remove old token: `new_token`
+5. Deploy again
+
+**Disabling Authentication:**
+
+If `MCP_AUTH_TOKENS` is not set or empty, authentication is disabled and all requests are accepted. This is suitable for local development but **not recommended for production**.
+
+**Local Development:**
+
+Add to your `.env.local` file:
+```bash
+MCP_AUTH_TOKENS=local-dev-token-for-testing
+```
+
+### Domo API Authentication
+
+Your Domo credentials provide direct access to your instance:
+
 - Secure your `.env` file and never commit it to version control
 - For Vercel deployments, use environment variables (not checked into code)
-- Run this server in a secure environment
+- Use Developer Token for full API access, OAuth for limited server-to-server access
+- Regularly rotate your tokens and credentials
+
+### Best Practices
+
+- **Production**: Always enable MCP authentication on Vercel deployments
+- **Tokens**: Use cryptographically secure tokens (minimum 32 bytes of entropy)
+- **HTTPS**: Vercel enforces HTTPS automatically - tokens are encrypted in transit
+- **Access Control**: Consider restricting CORS origins in `api/mcp.py` for additional security
+- **Monitoring**: Check Vercel logs for unauthorized access attempts
 
 ## Architecture
 
