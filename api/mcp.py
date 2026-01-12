@@ -11,6 +11,7 @@ from starlette.middleware.cors import CORSMiddleware
 from domo_mcp.auth import AuthMiddleware
 from domo_mcp.domo import DomoClient
 from domo_mcp.logger import Logger
+from domo_mcp.request_filter import RequestFilterMiddleware
 
 
 logger = Logger()
@@ -120,6 +121,10 @@ valid_tokens = get_valid_tokens()
 # Create the ASGI app at module level
 # Use path that matches Vercel routing
 app = mcp.http_app(path="/api/mcp", middleware=middleware, stateless_http=True)
+
+# Wrap with request filter middleware (strips extra fields from tool calls)
+# This must be applied before auth so it can modify the request body
+app = RequestFilterMiddleware(app)
 
 # Wrap with authentication middleware if tokens are configured
 if valid_tokens:
