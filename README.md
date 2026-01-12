@@ -248,6 +248,16 @@ docker ps -a --filter "name=domo-mcp-server" --format "{{.ID}}" | xargs -r docke
 
 If using OAuth and not finding expected datasets, consider switching to Developer Token authentication.
 
+### Client Compatibility (n8n, etc.)
+
+Some MCP clients send extra metadata fields with tool calls (e.g., `toolCallId`, `project_id`, `metadata`). This server automatically filters these extra fields, so it works out of the box with:
+
+- **n8n** - AI Agent nodes with MCP tools
+- **Custom integrations** - Any client that passes through extra context
+- **Standard MCP clients** - Claude Desktop, VS Code, Cursor, etc.
+
+No configuration needed—unknown parameters are silently ignored.
+
 ## Security & Authentication
 
 ### MCP Server Authentication (Vercel HTTP Endpoint)
