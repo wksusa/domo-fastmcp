@@ -14,3 +14,10 @@ wheels/
 uv.lock
 .vercel
 .env*.local
+
+.mcp.json
+mcp.json
+
+.claude/
+
+AGENTS.md
