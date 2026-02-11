@@ -37,6 +37,27 @@ class RequestFilterMiddleware:
             await self.app(scope, receive, send)
             return
 
+        # Reject GET: this deployment is POST-only (Streamable HTTP, no long-lived SSE).
+        # GET would open an SSE stream and hit serverless timeouts; clients must use POST.
+        if scope["method"] == "GET":
+            body = json.dumps({
+                "error": "Method Not Allowed",
+                "message": "This MCP server uses POST-only Streamable HTTP for serverless. Use POST for all MCP requests.",
+            }).encode()
+            response = Response(
+                content=body,
+                status_code=405,
+                media_type="application/json",
+                headers={"Allow": "POST, OPTIONS"},
+            )
+            await response(scope, receive, send)
+            return
+
+        # Only process POST requests (OPTIONS, DELETE pass through to app)
+        if scope["method"] != "POST":
+            await self.app(scope, receive, send)
+            return
+
         # Buffer the request body so we can modify it
         body_parts: list[bytes] = []
 

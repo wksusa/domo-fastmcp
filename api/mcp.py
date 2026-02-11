@@ -5,6 +5,7 @@ import os
 from typing import Optional
 
 from fastmcp import FastMCP
+from fastmcp.server.event_store import EventStore
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
@@ -120,7 +121,18 @@ valid_tokens = get_valid_tokens()
 
 # Create the ASGI app at module level
 # Use path that matches Vercel routing
-app = mcp.http_app(path="/api/mcp", middleware=middleware, stateless_http=True)
+# Streamable HTTP (no legacy SSE): POST-only for serverless; GET is rejected by middleware.
+# json_response=True: POST responses are JSON (no SSE stream), so no long-lived connections.
+# EventStore + retry_interval kept for POST response streaming if needed; GET is disabled.
+_event_store = EventStore()
+app = mcp.http_app(
+    path="/api/mcp",
+    middleware=middleware,
+    stateless_http=True,
+    json_response=True,
+    event_store=_event_store,
+    retry_interval=2000,
+)
 
 # Wrap with request filter middleware (strips extra fields from tool calls)
 # This must be applied before auth so it can modify the request body
