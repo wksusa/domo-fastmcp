@@ -307,3 +307,55 @@ class DomoClient:
         except Exception as e:
             self.logger.error(f"Error fetching role authorities: {str(e)}")
             return f"Error fetching role authorities: {str(e)}"
+
+    async def list_users(self, limit: int = 500, offset: int = 0) -> list[dict]:
+        """List Domo users with pagination.
+
+        Args:
+            limit: Maximum number of users to return per page.
+            offset: Starting offset for pagination.
+
+        Returns:
+            List of user dicts with id, email, etc.
+        """
+        try:
+            url = f"/v1/users?limit={limit}&offset={offset}"
+            data = await self.make_request(url, "GET")
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            self.logger.error(f"Error listing users: {str(e)}")
+            return []
+
+    async def get_dataset_details(self, dataset_id: str) -> dict | None:
+        """Get dataset details including PDP policies.
+
+        Args:
+            dataset_id: The dataset ID.
+
+        Returns:
+            Dict with pdpEnabled, policies, etc. or None on error.
+        """
+        try:
+            url = f"/v1/datasets/{dataset_id}"
+            data = await self.make_request(url, "GET")
+            return data if isinstance(data, dict) else None
+        except Exception as e:
+            self.logger.error(f"Error fetching dataset details: {str(e)}")
+            return None
+
+    async def list_group_users(self, group_id: str) -> list[dict]:
+        """List users in a Domo group.
+
+        Args:
+            group_id: The group ID.
+
+        Returns:
+            List of user dicts.
+        """
+        try:
+            url = f"/v1/groups/{group_id}/users"
+            data = await self.make_request(url, "GET")
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            self.logger.error(f"Error listing group users: {str(e)}")
+            return []
