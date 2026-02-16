@@ -113,7 +113,9 @@ Deploy as a serverless MCP server on Vercel using FastMCP:
    vercel deploy --prod --prebuilt
    ```
 
-Your MCP server will be available at `https://your-project.vercel.app/api/mcp`
+Your MCP server will be available at:
+- **Authenticated:** `https://your-project.vercel.app/mcp` (uses `AUTH_MODE` setting)
+- **No-auth:** `https://your-project.vercel.app/mcp-open` (no authentication or PDP — useful during migration)
 
 **Client Configuration (Claude Desktop, Cursor, etc.):**
 ```json
@@ -121,7 +123,7 @@ Your MCP server will be available at `https://your-project.vercel.app/api/mcp`
   "mcpServers": {
     "domo": {
       "type": "http",
-      "url": "https://your-project.vercel.app/api/mcp",
+      "url": "https://your-project.vercel.app/mcp",
       "headers": {
         "Authorization": "Bearer your-generated-token-here"
       }
@@ -130,7 +132,9 @@ Your MCP server will be available at `https://your-project.vercel.app/api/mcp`
 }
 ```
 
-**Note:** If `AUTH_MODE` is not set, it defaults to `bearer`. If `MCP_AUTH_TOKENS` is also not set, authentication is disabled. See [MCP Server Authentication Modes](#mcp-server-authentication-modes) and [Security & Authentication](#security--authentication) for more details.
+**No-auth endpoint** (`/mcp-open`): Available for clients that don't support authentication headers, or during migration to JWT auth. No PDP enforcement — all datasets are accessible. Remove `api/mcp_open.py` and its `vercel.json` entries when migration is complete.
+
+**Note:** If `AUTH_MODE` is not set, it defaults to `bearer`. If `MCP_AUTH_TOKENS` is also not set, authentication is disabled on the `/mcp` endpoint. See [MCP Server Authentication Modes](#mcp-server-authentication-modes) and [Security & Authentication](#security--authentication) for more details.
 
 ### Local Python Setup
 
@@ -472,7 +476,8 @@ Your Domo credentials provide direct access to your instance:
 This fork uses [FastMCP v3](https://github.com/jlowin/fastmcp) for both server modes. All tools are defined once in `server_factory.py` and shared across modes:
 
 - **stdio mode** (`python -m domo_mcp`) — For local use with VS Code, Claude Desktop, and MCP inspector
-- **HTTP mode** (`api/mcp.py`) — For Vercel serverless deployment with Streamable HTTP transport
+- **HTTP mode** (`api/mcp.py`) — Authenticated Vercel endpoint with Streamable HTTP transport
+- **HTTP no-auth mode** (`api/mcp_open.py`) — Unauthenticated Vercel endpoint (migration aid)
 
 Both modes provide:
 - Automatic tool discovery and schema generation

@@ -29,15 +29,17 @@ domo_mcp/               # Main package
 └── logger.py           # Logging utilities
 
 api/
-└── mcp.py              # Vercel serverless endpoint (HTTP mode)
+├── mcp.py              # Vercel serverless endpoint (authenticated)
+└── mcp_open.py         # Vercel serverless endpoint (no auth, migration aid)
 
 tests/                  # pytest tests
 ```
 
-### Two Server Modes
-Both modes use `server_factory.py` to define tools once:
+### Server Modes
+All modes use `server_factory.py` to define tools once:
 1. **stdio** (`domo_mcp/server.py`) - For local use with VS Code, Claude Desktop
-2. **HTTP** (`api/mcp.py`) - For Vercel deployment, supports Bearer/JWT auth
+2. **HTTP authenticated** (`api/mcp.py`) - Vercel `/mcp` endpoint, supports Bearer/JWT auth
+3. **HTTP no-auth** (`api/mcp_open.py`) - Vercel `/mcp-open` endpoint, no auth (migration aid)
 
 ## Development
 

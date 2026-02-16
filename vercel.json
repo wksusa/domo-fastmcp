@@ -3,9 +3,12 @@
   "version": 2,
   "rewrites": [
     { "source": "/mcp/:path*", "destination": "/api/mcp" },
-    { "source": "/mcp", "destination": "/api/mcp" }
+    { "source": "/mcp", "destination": "/api/mcp" },
+    { "source": "/mcp-open/:path*", "destination": "/api/mcp_open" },
+    { "source": "/mcp-open", "destination": "/api/mcp_open" }
   ],
   "functions": {
-    "api/mcp.py": { "maxDuration": 120 }
+    "api/mcp.py": { "maxDuration": 120 },
+    "api/mcp_open.py": { "maxDuration": 120 }
   }
 }
