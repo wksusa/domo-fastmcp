@@ -73,6 +73,16 @@ class DomoClient:
         self._oauth_token = None
         self._token_expires_at = 0
 
+        # For Developer Token mode, also check for OAuth credentials
+        # needed for public API calls (/v1/users, /v1/datasets, etc.)
+        # that only work via api.domo.com with OAuth
+        self._public_api_client_id = self.client_id or os.getenv("DOMO_CLIENT_ID")
+        self._public_api_client_secret = self.client_secret or os.getenv("DOMO_CLIENT_SECRET")
+        self._public_api_token = None
+        self._public_api_token_expires_at = 0
+        if self.auth_mode == "developer_token" and self._public_api_client_id:
+            self.logger.info("OAuth credentials available for public API calls (/v1/...)")
+
     async def _get_headers(self) -> dict:
         """Get request headers based on auth mode."""
         if self.auth_mode == "developer_token":
@@ -102,12 +112,54 @@ class DomoClient:
                 "Content-Type": "application/json",
             }
 
+    async def _get_public_api_headers(self) -> dict | None:
+        """Get OAuth headers for public API calls (api.domo.com/v1/...).
+
+        Returns None if OAuth credentials are not available.
+        """
+        if not self._public_api_client_id or not self._public_api_client_secret:
+            return None
+
+        if not self._public_api_token or time.time() >= (self._public_api_token_expires_at - 60):
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    "https://api.domo.com/oauth/token",
+                    params={"grant_type": "client_credentials", "scope": "data user"},
+                    auth=(self._public_api_client_id, self._public_api_client_secret)
+                )
+                response.raise_for_status()
+                token_data = response.json()
+                self._public_api_token = token_data["access_token"]
+                self._public_api_token_expires_at = time.time() + token_data.get("expires_in", 3600)
+                self.logger.info("Public API OAuth token refreshed")
+
+        return {
+            "Authorization": f"Bearer {self._public_api_token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+
     async def make_request(
         self, url: str, method: str, data: dict = None
     ) -> dict[str, Any] | None:
         """Make a request to the Domo API with proper error handling, timeout tracking, and response size limits."""
-        headers = await self._get_headers()
-        full_url = f"{self.DOMO_API_BASE}{url}"
+        # Public API endpoints (/v1/...) require OAuth via api.domo.com.
+        # Developer Tokens only work with instance-domain internal APIs.
+        if url.startswith("/v1/") and self.auth_mode == "developer_token":
+            public_headers = await self._get_public_api_headers()
+            if public_headers:
+                headers = public_headers
+                full_url = f"https://api.domo.com{url}"
+            else:
+                self.logger.warning(
+                    f"Public API call {url} requires OAuth credentials "
+                    "(DOMO_CLIENT_ID + DOMO_CLIENT_SECRET) — Developer Token won't work with api.domo.com"
+                )
+                headers = await self._get_headers()
+                full_url = f"{self.DOMO_API_BASE}{url}"
+        else:
+            headers = await self._get_headers()
+            full_url = f"{self.DOMO_API_BASE}{url}"
         start_time = time.time()
 
         try:
