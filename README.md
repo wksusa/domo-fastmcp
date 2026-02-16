@@ -46,14 +46,25 @@ The HTTP endpoint (Vercel deployment) supports three authentication modes, contr
 | Mode | `AUTH_MODE` | Required Env Vars | Use Case |
 |------|-------------|-------------------|----------|
 | **Bearer Token** | `bearer` (default) | `MCP_AUTH_TOKENS` | Direct client access, existing setups |
-| **JWT** | `jwt` | `JWT_SIGNING_KEY`, `GATEWAY_BASE_URL` | Gateway integration with per-user identity + PDP |
+| **JWT** | `jwt` | `JWT_PUBLIC_KEY` or `JWT_JWKS_URI` | BYO identity provider with per-user PDP |
 | **None** | `none` | — | Local development, testing |
 
-**Upgrading from v0.1.x:** Existing deployments require no changes. `AUTH_MODE` defaults to `bearer`, which preserves the exact v0.1.x behavior.
+**Upgrading from v0.1.x:** Existing bearer-mode deployments require no changes. `AUTH_MODE` defaults to `bearer`, which preserves the exact v0.1.x behavior. JWT mode has been redesigned — see [JWT Authentication](#jwt-authentication-gateway-integration) for new env vars.
 
-**Bearer mode** validates tokens from the `Authorization: Bearer <token>` header against `MCP_AUTH_TOKENS`. This is the simplest setup for direct client access.
+**Bearer mode** validates tokens from the `Authorization: Bearer <token>` header against `MCP_AUTH_TOKENS`. Tokens can optionally include email mapping for [PDP](#personalized-data-permissions-pdp):
 
-**JWT mode** validates JSON Web Tokens issued by an upstream gateway (e.g., [mcp-gateway](https://github.com/wksusa/mcp-gateway)). This enables per-user dataset authorization via [PDP](#personalized-data-permissions-pdp). The JWT must contain an `upstream_claims.email` or top-level `email` claim that maps to a Domo user account.
+```bash
+# Simple tokens (no PDP — full dataset access)
+MCP_AUTH_TOKENS=token1,token2
+
+# Tokens with email mapping (enables PDP)
+MCP_AUTH_TOKENS=token1:alice@corp.com,token2:bob@corp.com
+
+# Mix of both (service accounts + user tokens)
+MCP_AUTH_TOKENS=svc-token,user-token:alice@corp.com
+```
+
+**JWT mode** validates JSON Web Tokens from any identity provider. Supports RS256 (PEM or JWKS), ES256, and HS256 with auto-detection. The JWT must contain an `email` or `upstream_claims.email` claim that maps to a Domo user account for [PDP](#personalized-data-permissions-pdp).
 
 **None mode** disables MCP-level authentication entirely. Domo API authentication (Developer Token or OAuth) still applies. Suitable for local development with stdio mode.
 
@@ -88,10 +99,13 @@ Deploy as a serverless MCP server on Vercel using FastMCP:
    vercel env add MCP_AUTH_TOKENS production
    # Generate a secure token: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
 
-   # Option B: JWT (for gateway integration with per-user PDP)
+   # Option B: JWT (BYO identity provider with per-user PDP)
    vercel env add AUTH_MODE production        # set to "jwt"
-   vercel env add JWT_SIGNING_KEY production  # shared secret with gateway (32+ chars)
-   vercel env add GATEWAY_BASE_URL production # gateway URL, must match JWT "iss" claim
+   # Choose ONE of:
+   vercel env add JWT_PUBLIC_KEY production   # PEM public key or HMAC shared secret
+   vercel env add JWT_JWKS_URI production     # OR: JWKS endpoint URL
+   # Optional:
+   vercel env add JWT_ISSUER production       # Expected "iss" claim (if your IdP sets one)
    ```
 5. Deploy:
    ```bash
@@ -221,14 +235,23 @@ Your MCP server will be available at `https://your-project.vercel.app/api/mcp`
 
 ## Personalized Data Permissions (PDP)
 
-When using `AUTH_MODE=jwt`, the server enforces Domo's [Personalized Data Permissions](https://domo-support.domo.com/s/article/360043429693) at the MCP layer. This provides per-user dataset access control based on the authenticated user's identity.
+When the server can identify a user by email, it enforces Domo's [Personalized Data Permissions](https://domo-support.domo.com/s/article/360043429693) at the MCP layer. This provides per-user dataset access control based on the authenticated user's identity.
 
 **How it works:**
 
-1. The JWT `email` claim is extracted from the access token
+1. The user's email is extracted from the access token (JWT claims or bearer email mapping)
 2. The email is resolved to a Domo user ID (cached for 1 hour)
 3. Each dataset operation checks the user against that dataset's PDP policies
 4. Users only see datasets and data they are authorized to access in Domo
+
+**Which auth modes support PDP:**
+
+| Auth Mode | PDP Support |
+|-----------|-------------|
+| `jwt` | Always — email from JWT `email` or `upstream_claims.email` claim |
+| `bearer` with email mapping | Yes — `MCP_AUTH_TOKENS=token:user@corp.com` |
+| `bearer` without email | No — service account tokens have full access |
+| `none` / stdio | No — no user identity available |
 
 **Which tools are affected:**
 
@@ -243,8 +266,9 @@ When using `AUTH_MODE=jwt`, the server enforces Domo's [Personalized Data Permis
 | `list_role_authorities` | No PDP (admin operation) |
 
 **When PDP is NOT enforced:**
-- `AUTH_MODE=bearer` or `AUTH_MODE=none` — no user identity available, all datasets accessible
-- stdio mode (local development) — no JWT context
+- Bearer tokens without email mapping — service account, full dataset access
+- `AUTH_MODE=none` — no auth, all datasets accessible
+- stdio mode (local development) — no token context
 - Datasets with PDP disabled in Domo — always accessible
 
 **Common error messages:**
@@ -306,8 +330,8 @@ If using OAuth and not finding expected datasets, consider switching to Develope
 
 ### JWT Authentication Errors
 
-- **"Invalid JWT signature"** — Ensure `JWT_SIGNING_KEY` matches the value configured in your gateway. Both sides must use the same shared secret.
-- **"JWT issuer mismatch"** — `GATEWAY_BASE_URL` must match the `iss` claim in the JWT exactly (including `https://` and no trailing slash).
+- **"Invalid JWT signature"** — Ensure `JWT_PUBLIC_KEY` (or the key at `JWT_JWKS_URI`) matches the signing key used by your identity provider. For HS256, both sides must use the same shared secret.
+- **"JWT issuer mismatch"** — `JWT_ISSUER` must match the `iss` claim in the JWT exactly (including `https://` and no trailing slash).
 - **"Your account is not linked to a Domo account"** — The `email` claim in the JWT doesn't match any Domo user. Verify the email exists in your Domo instance.
 - **"Access denied" on a dataset** — The user's Domo account doesn't have a PDP policy granting access to the requested dataset. Check the dataset's PDP configuration in Domo.
 
@@ -382,29 +406,49 @@ Add to your `.env.local` file:
 MCP_AUTH_TOKENS=local-dev-token-for-testing
 ```
 
-#### JWT Authentication (Gateway Integration)
+#### JWT Authentication (BYO Identity Provider)
 
-JWT mode is designed for use with an upstream gateway that authenticates users and forwards their identity via signed JWTs.
+JWT mode validates tokens from any identity provider that issues JWTs. The algorithm is auto-detected from the key format.
 
-**Setup:**
+**Environment variables:**
 
-1. **Set environment variables in Vercel:**
-   ```bash
-   vercel env add AUTH_MODE production        # set to "jwt"
-   vercel env add JWT_SIGNING_KEY production  # shared secret with your gateway
-   vercel env add GATEWAY_BASE_URL production # e.g., https://gateway.example.com
-   ```
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AUTH_MODE` | Yes | Set to `jwt` |
+| `JWT_PUBLIC_KEY` | One of these | PEM public key (RS256/ES256) or shared secret (HS256) |
+| `JWT_JWKS_URI` | One of these | JWKS endpoint URL (RS256, auto-rotates keys) |
+| `JWT_ISSUER` | No | Expected `iss` claim value |
 
-2. **How it works:**
-   - The gateway signs JWTs with a shared secret (`JWT_SIGNING_KEY`) using HS256
-   - The key is derived via HKDF from the shared secret (low-entropy material is acceptable)
-   - The server validates the JWT signature, issuer (`GATEWAY_BASE_URL`), and expiration
-   - The `email` claim (or `upstream_claims.email`) is used to resolve the user's Domo account
-   - [PDP policies](#personalized-data-permissions-pdp) are enforced based on the resolved Domo user
+**Algorithm auto-detection:**
 
-3. **Required JWT claims:**
-   - `iss` — Must match `GATEWAY_BASE_URL` exactly
-   - `email` or `upstream_claims.email` — Must match a Domo user's email address
+| Key Format | Algorithm |
+|------------|-----------|
+| JWKS URI | RS256 |
+| PEM starting with `-----BEGIN PUBLIC KEY-----` | RS256 |
+| PEM starting with `-----BEGIN EC PUBLIC KEY-----` | ES256 |
+| Raw string (shared secret) | HS256 |
+
+**Setup examples:**
+
+```bash
+# JWKS URI (recommended for production — supports key rotation)
+AUTH_MODE=jwt
+JWT_JWKS_URI=https://auth.example.com/.well-known/jwks.json
+JWT_ISSUER=https://auth.example.com
+
+# RSA public key
+AUTH_MODE=jwt
+JWT_PUBLIC_KEY="-----BEGIN PUBLIC KEY-----\nMIIBI..."
+
+# HMAC shared secret (simplest — for gateway integration)
+AUTH_MODE=jwt
+JWT_PUBLIC_KEY=your-shared-secret-32chars-min
+JWT_ISSUER=https://gateway.example.com
+```
+
+**Required JWT claims:**
+- `email` or `upstream_claims.email` — Must match a Domo user's email address
+- `iss` — Must match `JWT_ISSUER` (if set)
 
 ### Domo API Authentication
 
@@ -433,9 +477,9 @@ This fork uses [FastMCP v3](https://github.com/jlowin/fastmcp) for both server m
 Both modes provide:
 - Automatic tool discovery and schema generation
 - Pydantic input validation on all tools
-- PDP enforcement when JWT identity is available (HTTP/JWT mode only)
+- PDP enforcement when user identity is available (via JWT email claim or bearer email mapping)
 
 The HTTP mode additionally provides:
 - Stateless HTTP transport for serverless environments
 - CORS support for browser-based clients
-- Multi-mode authentication (Bearer token or JWT)
+- Multi-mode authentication (Bearer token with optional email mapping, or JWT with BYO identity provider)
