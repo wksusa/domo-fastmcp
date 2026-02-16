@@ -3,6 +3,10 @@
 import asyncio
 import time
 
+from .logger import Logger
+
+logger = Logger()
+
 
 class UserResolver:
     """Maps email addresses to Domo user IDs.
@@ -30,7 +34,16 @@ class UserResolver:
         """
         if time.time() - self._cache_time > self.CACHE_TTL:
             await self._refresh_cache()
-        return self._cache.get(email.lower())
+        normalized = email.lower()
+        user_id = self._cache.get(normalized)
+        if user_id:
+            logger.info(f"UserResolver: resolved {normalized} -> user_id={user_id}")
+        else:
+            logger.warning(
+                f"UserResolver: no Domo user found for '{normalized}' "
+                f"(cache has {len(self._cache)} users)"
+            )
+        return user_id
 
     async def _refresh_cache(self):
         async with self._lock:
@@ -57,3 +70,9 @@ class UserResolver:
 
             self._cache = new_cache
             self._cache_time = time.time()
+            logger.info(
+                f"UserResolver: refreshed cache — {len(new_cache)} users loaded"
+            )
+            if new_cache:
+                sample = list(new_cache.keys())[:3]
+                logger.debug(f"UserResolver: sample emails: {sample}")

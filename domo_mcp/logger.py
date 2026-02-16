@@ -16,5 +16,8 @@ class Logger:
     def warning(self, message: str) -> None:
         print(f"[WARNING] {message}", file=sys.stderr)
 
+    def debug(self, message: str) -> None:
+        print(f"[DEBUG] {message}", file=sys.stderr)
+
     def error(self, message: str) -> None:
         print(f"[ERROR] {message}", file=sys.stderr)

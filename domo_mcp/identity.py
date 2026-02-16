@@ -2,6 +2,10 @@
 
 from fastmcp.server.dependencies import get_access_token
 
+from .logger import Logger
+
+logger = Logger()
+
 
 def get_user_email() -> str | None:
     """Get the authenticated user's email from the access token.
@@ -17,10 +21,17 @@ def get_user_email() -> str | None:
     """
     token = get_access_token()
     if not token:
+        logger.debug("get_user_email: no access token present")
         return None
     claims = token.claims or {}
+    claim_keys = list(claims.keys())
+    logger.info(f"get_user_email: JWT claim keys: {claim_keys}")
     upstream = claims.get("upstream_claims", {})
+    if upstream:
+        logger.info(f"get_user_email: upstream_claims keys: {list(upstream.keys())}")
     email = upstream.get("email") or claims.get("email")
     if email is not None and not isinstance(email, str):
+        logger.warning(f"get_user_email: email claim is not a string: {type(email)}")
         return None
+    logger.info(f"get_user_email: resolved email={email}")
     return email
