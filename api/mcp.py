@@ -21,12 +21,18 @@ logger = Logger()
 AUTH_MODE = os.getenv("AUTH_MODE", "bearer")
 tokens_str = os.getenv("MCP_AUTH_TOKENS", "")
 
+logger.info(f"AUTH_MODE={AUTH_MODE!r}, auth verifier type: creating...")
+
 auth = create_auth(AUTH_MODE, tokens_str)
 mcp = create_server(auth=auth)
 
+logger.info(f"Auth verifier: {type(auth).__name__ if auth else 'None (no auth)'}")
+
 # Log auth mode
 if AUTH_MODE == "jwt":
-    logger.info("JWT auth enabled via FastMCP JWTVerifier")
+    jwt_key = os.getenv("JWT_PUBLIC_KEY", "")
+    jwks_uri = os.getenv("JWT_JWKS_URI", "")
+    logger.info(f"JWT auth enabled — JWT_PUBLIC_KEY={'set' if jwt_key else 'unset'}, JWT_JWKS_URI={'set' if jwks_uri else 'unset'}")
 elif AUTH_MODE == "bearer":
     if auth:
         logger.info("Bearer auth enabled via ConstantTimeTokenVerifier")
