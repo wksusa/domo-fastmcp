@@ -53,7 +53,7 @@ The HTTP endpoint (Vercel deployment) supports three authentication modes, contr
 
 **Bearer mode** validates tokens from the `Authorization: Bearer <token>` header against `MCP_AUTH_TOKENS`. This is the simplest setup for direct client access.
 
-**JWT mode** validates JSON Web Tokens issued by an upstream gateway (e.g., [mcp-gateway](https://github.com/wksusa/mcp-gateway)). This enables per-user dataset authorization via [PDP](#personalized-data-permissions-pdp). The JWT must contain an `email` claim (or `upstream_claims.email`) that maps to a Domo user account.
+**JWT mode** validates JSON Web Tokens issued by an upstream gateway (e.g., [mcp-gateway](https://github.com/wksusa/mcp-gateway)). This enables per-user dataset authorization via [PDP](#personalized-data-permissions-pdp). The JWT must contain an `upstream_claims.email` or top-level `email` claim that maps to a Domo user account.
 
 **None mode** disables MCP-level authentication entirely. Domo API authentication (Developer Token or OAuth) still applies. Suitable for local development with stdio mode.
 

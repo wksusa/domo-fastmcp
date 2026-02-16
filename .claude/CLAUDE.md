@@ -24,6 +24,7 @@ domo_mcp/               # Main package
 ├── identity.py         # JWT email extraction from access token
 ├── user_resolver.py    # Email → Domo user ID resolution (cached)
 ├── pdp.py              # PDP authorization checks on datasets
+├── request_filter.py   # Middleware to strip extra fields (n8n compat)
 ├── validation.py       # Pydantic input validation
 └── logger.py           # Logging utilities
 
