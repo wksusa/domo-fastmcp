@@ -1,6 +1,6 @@
 # Domo MCP Server
 
-A Model Context Protocol (MCP) server that connects to Domo API. This is an enhanced fork of [DomoApps/domo-mcp-server](https://github.com/DomoApps/domo-mcp-server) with added support for OAuth authentication and Vercel deployment via FastMCP.
+A Model Context Protocol (MCP) server that connects to Domo API. This is an enhanced fork of [DomoApps/domo-mcp-server](https://github.com/DomoApps/domo-mcp-server) with OAuth authentication, JWT-based gateway integration, per-user dataset authorization (PDP), and Vercel deployment via FastMCP v3.
 
 ## Features
 
@@ -39,6 +39,24 @@ DOMO_CLIENT_ID=<your_client_id>
 DOMO_CLIENT_SECRET=<your_client_secret>
 ```
 
+## MCP Server Authentication Modes
+
+The HTTP endpoint (Vercel deployment) supports three authentication modes, controlled by the `AUTH_MODE` environment variable:
+
+| Mode | `AUTH_MODE` | Required Env Vars | Use Case |
+|------|-------------|-------------------|----------|
+| **Bearer Token** | `bearer` (default) | `MCP_AUTH_TOKENS` | Direct client access, existing setups |
+| **JWT** | `jwt` | `JWT_SIGNING_KEY`, `GATEWAY_BASE_URL` | Gateway integration with per-user identity + PDP |
+| **None** | `none` | — | Local development, testing |
+
+**Upgrading from v0.1.x:** Existing deployments require no changes. `AUTH_MODE` defaults to `bearer`, which preserves the exact v0.1.x behavior.
+
+**Bearer mode** validates tokens from the `Authorization: Bearer <token>` header against `MCP_AUTH_TOKENS`. This is the simplest setup for direct client access.
+
+**JWT mode** validates JSON Web Tokens issued by an upstream gateway (e.g., [mcp-gateway](https://github.com/wksusa/mcp-gateway)). This enables per-user dataset authorization via [PDP](#personalized-data-permissions-pdp). The JWT must contain an `email` claim (or `upstream_claims.email`) that maps to a Domo user account.
+
+**None mode** disables MCP-level authentication entirely. Domo API authentication (Developer Token or OAuth) still applies. Suitable for local development with stdio mode.
+
 ## Prerequisites
 
 - Python 3.11+ OR Docker
@@ -64,15 +82,21 @@ Deploy as a serverless MCP server on Vercel using FastMCP:
    vercel env add DOMO_CLIENT_ID production
    vercel env add DOMO_CLIENT_SECRET production
 
-   # MCP Server Authentication (recommended for production)
-   # Generate a secure token first:
-   python3 -c "import secrets; print(secrets.token_urlsafe(32))"
-   # Then set it:
+   # MCP Server Authentication (choose one):
+
+   # Option A: Bearer token (default, simplest)
    vercel env add MCP_AUTH_TOKENS production
+   # Generate a secure token: python3 -c "import secrets; print(secrets.token_urlsafe(32))"
+
+   # Option B: JWT (for gateway integration with per-user PDP)
+   vercel env add AUTH_MODE production        # set to "jwt"
+   vercel env add JWT_SIGNING_KEY production  # shared secret with gateway (32+ chars)
+   vercel env add GATEWAY_BASE_URL production # gateway URL, must match JWT "iss" claim
    ```
 5. Deploy:
    ```bash
-   vercel deploy --prod
+   npm run build -- --vercel
+   vercel deploy --prod --prebuilt
    ```
 
 Your MCP server will be available at `https://your-project.vercel.app/api/mcp`
@@ -92,7 +116,7 @@ Your MCP server will be available at `https://your-project.vercel.app/api/mcp`
 }
 ```
 
-**Note:** If you don't set `MCP_AUTH_TOKENS`, authentication is disabled. See [Security & Authentication](#security--authentication) for more details.
+**Note:** If `AUTH_MODE` is not set, it defaults to `bearer`. If `MCP_AUTH_TOKENS` is also not set, authentication is disabled. See [MCP Server Authentication Modes](#mcp-server-authentication-modes) and [Security & Authentication](#security--authentication) for more details.
 
 ### Local Python Setup
 
@@ -195,6 +219,38 @@ Your MCP server will be available at `https://your-project.vercel.app/api/mcp`
 | `create_role(name, from_role_id, description?)` | Create a new role |
 | `list_role_authorities(role_id)` | List authorities for a role |
 
+## Personalized Data Permissions (PDP)
+
+When using `AUTH_MODE=jwt`, the server enforces Domo's [Personalized Data Permissions](https://domo-support.domo.com/s/article/360043429693) at the MCP layer. This provides per-user dataset access control based on the authenticated user's identity.
+
+**How it works:**
+
+1. The JWT `email` claim is extracted from the access token
+2. The email is resolved to a Domo user ID (cached for 1 hour)
+3. Each dataset operation checks the user against that dataset's PDP policies
+4. Users only see datasets and data they are authorized to access in Domo
+
+**Which tools are affected:**
+
+| Tool | PDP Behavior |
+|------|-------------|
+| `query_dataset` | Access check before query execution |
+| `get_dataset_schema` | Access check before returning schema |
+| `get_dataset_metadata` | Access check before returning metadata |
+| `search_datasets` | Results filtered to accessible datasets only |
+| `list_roles` | No PDP (admin operation) |
+| `create_role` | No PDP (admin operation) |
+| `list_role_authorities` | No PDP (admin operation) |
+
+**When PDP is NOT enforced:**
+- `AUTH_MODE=bearer` or `AUTH_MODE=none` — no user identity available, all datasets accessible
+- stdio mode (local development) — no JWT context
+- Datasets with PDP disabled in Domo — always accessible
+
+**Common error messages:**
+- `"Access denied"` — The user's Domo account doesn't have a PDP policy granting access to this dataset
+- `"Your account is not linked to a Domo account"` — The JWT email doesn't match any Domo user
+
 ## Example Usage with LLMs
 
 When used with LLMs that support the MCP protocol, this server enables natural language interaction with your Domo environment:
@@ -248,6 +304,13 @@ docker ps -a --filter "name=domo-mcp-server" --format "{{.ID}}" | xargs -r docke
 
 If using OAuth and not finding expected datasets, consider switching to Developer Token authentication.
 
+### JWT Authentication Errors
+
+- **"Invalid JWT signature"** — Ensure `JWT_SIGNING_KEY` matches the value configured in your gateway. Both sides must use the same shared secret.
+- **"JWT issuer mismatch"** — `GATEWAY_BASE_URL` must match the `iss` claim in the JWT exactly (including `https://` and no trailing slash).
+- **"Your account is not linked to a Domo account"** — The `email` claim in the JWT doesn't match any Domo user. Verify the email exists in your Domo instance.
+- **"Access denied" on a dataset** — The user's Domo account doesn't have a PDP policy granting access to the requested dataset. Check the dataset's PDP configuration in Domo.
+
 ### Client Compatibility (n8n, etc.)
 
 Some MCP clients send extra metadata fields with tool calls (e.g., `toolCallId`, `project_id`, `metadata`). This server automatically filters these extra fields, so it works out of the box with:
@@ -262,7 +325,7 @@ No configuration needed—unknown parameters are silently ignored.
 
 ### MCP Server Authentication (Vercel HTTP Endpoint)
 
-The Vercel HTTP endpoint supports Bearer token authentication to secure access to the MCP server. This prevents unauthorized users from calling your MCP tools.
+The Vercel HTTP endpoint supports multiple authentication modes. See [MCP Server Authentication Modes](#mcp-server-authentication-modes) for an overview.
 
 **Setting Up Authentication:**
 
@@ -319,6 +382,30 @@ Add to your `.env.local` file:
 MCP_AUTH_TOKENS=local-dev-token-for-testing
 ```
 
+#### JWT Authentication (Gateway Integration)
+
+JWT mode is designed for use with an upstream gateway that authenticates users and forwards their identity via signed JWTs.
+
+**Setup:**
+
+1. **Set environment variables in Vercel:**
+   ```bash
+   vercel env add AUTH_MODE production        # set to "jwt"
+   vercel env add JWT_SIGNING_KEY production  # shared secret with your gateway
+   vercel env add GATEWAY_BASE_URL production # e.g., https://gateway.example.com
+   ```
+
+2. **How it works:**
+   - The gateway signs JWTs with a shared secret (`JWT_SIGNING_KEY`) using HS256
+   - The key is derived via HKDF from the shared secret (low-entropy material is acceptable)
+   - The server validates the JWT signature, issuer (`GATEWAY_BASE_URL`), and expiration
+   - The `email` claim (or `upstream_claims.email`) is used to resolve the user's Domo account
+   - [PDP policies](#personalized-data-permissions-pdp) are enforced based on the resolved Domo user
+
+3. **Required JWT claims:**
+   - `iss` — Must match `GATEWAY_BASE_URL` exactly
+   - `email` or `upstream_claims.email` — Must match a Domo user's email address
+
 ### Domo API Authentication
 
 Your Domo credentials provide direct access to your instance:
@@ -338,10 +425,17 @@ Your Domo credentials provide direct access to your instance:
 
 ## Architecture
 
-This fork uses [FastMCP](https://github.com/jlowin/fastmcp) for the Vercel deployment, providing:
+This fork uses [FastMCP v3](https://github.com/jlowin/fastmcp) for both server modes. All tools are defined once in `server_factory.py` and shared across modes:
 
+- **stdio mode** (`python -m domo_mcp`) — For local use with VS Code, Claude Desktop, and MCP inspector
+- **HTTP mode** (`api/mcp.py`) — For Vercel serverless deployment with Streamable HTTP transport
+
+Both modes provide:
+- Automatic tool discovery and schema generation
+- Pydantic input validation on all tools
+- PDP enforcement when JWT identity is available (HTTP/JWT mode only)
+
+The HTTP mode additionally provides:
 - Stateless HTTP transport for serverless environments
 - CORS support for browser-based clients
-- Automatic tool discovery and schema generation
-
-The local stdio server uses the original MCP implementation for compatibility with VS Code and other stdio-based clients.
+- Multi-mode authentication (Bearer token or JWT)

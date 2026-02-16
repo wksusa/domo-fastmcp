@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-**Domo MCP Server** - A Model Context Protocol server that connects AI assistants to Domo's data platform. Fork of DomoApps/domo-mcp-server with added OAuth support and Vercel deployment.
+**Domo MCP Server** - A Model Context Protocol server that connects AI assistants to Domo's data platform. Fork of DomoApps/domo-mcp-server with OAuth, JWT auth, PDP authorization, and Vercel deployment via FastMCP v3.
 
 ### Key Capabilities
 - Query Domo datasets with SQL
@@ -13,24 +13,30 @@
 ## Project Structure
 
 ```
-domo_mcp/           # Main package
-├── __init__.py     # Package version (__version__)
-├── __main__.py     # Entry point for `python -m domo_mcp`
-├── server.py       # FastMCP server with tool definitions (stdio mode)
-├── domo.py         # DomoClient - API interactions
-├── auth.py         # Bearer token authentication middleware
-├── validation.py   # Pydantic input validation
-└── logger.py       # Logging utilities
+domo_mcp/               # Main package
+├── __init__.py         # Package version (__version__)
+├── __main__.py         # Entry point for `python -m domo_mcp`
+├── server.py           # Thin wrapper for stdio mode
+├── server_factory.py   # Shared server factory - all 7 tools defined here
+├── domo.py             # DomoClient - Domo API interactions
+├── auth.py             # Bearer token ASGI middleware
+├── auth_config.py      # Auth mode factory (jwt/bearer/none)
+├── identity.py         # JWT email extraction from access token
+├── user_resolver.py    # Email → Domo user ID resolution (cached)
+├── pdp.py              # PDP authorization checks on datasets
+├── validation.py       # Pydantic input validation
+└── logger.py           # Logging utilities
 
 api/
-└── mcp.py          # Vercel serverless endpoint (HTTP mode)
+└── mcp.py              # Vercel serverless endpoint (HTTP mode)
 
-tests/              # pytest tests
+tests/                  # pytest tests
 ```
 
 ### Two Server Modes
+Both modes use `server_factory.py` to define tools once:
 1. **stdio** (`domo_mcp/server.py`) - For local use with VS Code, Claude Desktop
-2. **HTTP** (`api/mcp.py`) - For Vercel deployment, uses AuthMiddleware
+2. **HTTP** (`api/mcp.py`) - For Vercel deployment, supports Bearer/JWT auth
 
 ## Development
 
@@ -52,8 +58,13 @@ DOMO_HOST=instance.domo.com
 DOMO_CLIENT_ID=xxx
 DOMO_CLIENT_SECRET=xxx
 
-# HTTP endpoint auth (Vercel):
-MCP_AUTH_TOKENS=token1,token2  # Comma-separated for rotation
+# MCP server auth (choose one):
+AUTH_MODE=bearer               # jwt, bearer (default), or none
+MCP_AUTH_TOKENS=token1,token2  # For bearer mode (comma-separated)
+
+# For JWT mode (gateway integration):
+JWT_SIGNING_KEY=your-shared-secret-32chars-min
+GATEWAY_BASE_URL=https://gateway.example.com
 ```
 
 ### Running Locally
