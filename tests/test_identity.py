@@ -1,4 +1,4 @@
-"""Tests for identity extraction from JWT tokens."""
+"""Tests for identity extraction from access tokens (JWT and bearer)."""
 
 import pytest
 from unittest.mock import patch, MagicMock
@@ -41,5 +41,52 @@ class TestGetUserEmail:
     def test_none_claims(self):
         token = MagicMock()
         token.claims = None
+        with patch("domo_mcp.identity.get_access_token", return_value=token):
+            assert get_user_email() is None
+
+
+class TestBearerTokenIdentity:
+    """Test identity extraction from bearer tokens with email mapping."""
+
+    def test_email_from_bearer_claims(self):
+        """ConstantTimeTokenVerifier sets email in top-level claims."""
+        token = MagicMock()
+        token.claims = {
+            "client_id": "bearer:alice@corp.com",
+            "scopes": [],
+            "email": "alice@corp.com",
+        }
+        with patch("domo_mcp.identity.get_access_token", return_value=token):
+            assert get_user_email() == "alice@corp.com"
+
+    def test_service_account_no_email(self):
+        """Service account token (no email) returns None."""
+        token = MagicMock()
+        token.claims = {
+            "client_id": "bearer:service",
+            "scopes": [],
+        }
+        with patch("domo_mcp.identity.get_access_token", return_value=token):
+            assert get_user_email() is None
+
+
+class TestEmailTypeValidation:
+    """Test that non-string email claims are rejected."""
+
+    def test_integer_email_returns_none(self):
+        token = MagicMock()
+        token.claims = {"email": 12345}
+        with patch("domo_mcp.identity.get_access_token", return_value=token):
+            assert get_user_email() is None
+
+    def test_list_email_returns_none(self):
+        token = MagicMock()
+        token.claims = {"email": ["alice@example.com"]}
+        with patch("domo_mcp.identity.get_access_token", return_value=token):
+            assert get_user_email() is None
+
+    def test_dict_email_returns_none(self):
+        token = MagicMock()
+        token.claims = {"email": {"addr": "alice@example.com"}}
         with patch("domo_mcp.identity.get_access_token", return_value=token):
             assert get_user_email() is None

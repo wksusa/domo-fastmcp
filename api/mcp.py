@@ -6,7 +6,6 @@ from fastmcp.server.event_store import EventStore
 from starlette.middleware import Middleware
 from starlette.middleware.cors import CORSMiddleware
 
-from domo_mcp.auth import AuthMiddleware
 from domo_mcp.auth_config import create_auth
 from domo_mcp.logger import Logger
 from domo_mcp.request_filter import RequestFilterMiddleware
@@ -20,10 +19,21 @@ logger = Logger()
 # ============================================================================
 
 AUTH_MODE = os.getenv("AUTH_MODE", "bearer")
+tokens_str = os.getenv("MCP_AUTH_TOKENS", "")
 
-# Create server with JWT auth if configured, otherwise no framework-level auth
-auth = create_auth(AUTH_MODE) if AUTH_MODE == "jwt" else None
+auth = create_auth(AUTH_MODE, tokens_str)
 mcp = create_server(auth=auth)
+
+# Log auth mode
+if AUTH_MODE == "jwt":
+    logger.info("JWT auth enabled via FastMCP JWTVerifier")
+elif AUTH_MODE == "bearer":
+    if auth:
+        logger.info("Bearer auth enabled via ConstantTimeTokenVerifier")
+    else:
+        logger.warning("AUTH_MODE=bearer but no MCP_AUTH_TOKENS set — auth disabled")
+else:
+    logger.warning("AUTH_MODE=none — authentication disabled")
 
 
 # ============================================================================
@@ -39,16 +49,6 @@ middleware = [
     )
 ]
 
-
-def get_valid_tokens() -> list[str]:
-    """Load and validate authentication tokens from environment."""
-    tokens_str = os.getenv("MCP_AUTH_TOKENS", "")
-    if not tokens_str:
-        return []
-    tokens = [t.strip() for t in tokens_str.split(",") if t.strip()]
-    return tokens
-
-
 # Create the ASGI app
 _event_store = EventStore()
 app = mcp.http_app(
@@ -62,16 +62,3 @@ app = mcp.http_app(
 
 # Wrap with request filter middleware (strips extra fields from tool calls)
 app = RequestFilterMiddleware(app)
-
-# Wrap with Bearer token auth middleware if in bearer mode
-if AUTH_MODE == "bearer":
-    valid_tokens = get_valid_tokens()
-    if valid_tokens:
-        app = AuthMiddleware(app, valid_tokens)
-        logger.info(f"Bearer auth enabled with {len(valid_tokens)} token(s)")
-    else:
-        logger.warning("AUTH_MODE=bearer but no MCP_AUTH_TOKENS set — auth disabled")
-elif AUTH_MODE == "jwt":
-    logger.info("JWT auth enabled via FastMCP JWTVerifier")
-else:
-    logger.warning("AUTH_MODE=none — authentication disabled")
