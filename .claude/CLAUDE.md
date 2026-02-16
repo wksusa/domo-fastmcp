@@ -19,7 +19,7 @@ domo_mcp/               # Main package
 ├── server.py           # Thin wrapper for stdio mode
 ├── server_factory.py   # Shared server factory - all 7 tools defined here
 ├── domo.py             # DomoClient - Domo API interactions
-├── auth.py             # Bearer token ASGI middleware
+├── token_verifier.py   # ConstantTimeTokenVerifier (timing-safe bearer auth)
 ├── auth_config.py      # Auth mode factory (jwt/bearer/none)
 ├── identity.py         # JWT email extraction from access token
 ├── user_resolver.py    # Email → Domo user ID resolution (cached)
@@ -61,11 +61,12 @@ DOMO_CLIENT_SECRET=xxx
 
 # MCP server auth (choose one):
 AUTH_MODE=bearer               # jwt, bearer (default), or none
-MCP_AUTH_TOKENS=token1,token2  # For bearer mode (comma-separated)
+MCP_AUTH_TOKENS=token1,token2  # For bearer mode (comma-separated, optional :email for PDP)
 
-# For JWT mode (gateway integration):
-JWT_SIGNING_KEY=your-shared-secret-32chars-min
-GATEWAY_BASE_URL=https://gateway.example.com
+# For JWT mode (BYO identity provider):
+JWT_PUBLIC_KEY=your-key        # PEM public key or HMAC shared secret
+# OR: JWT_JWKS_URI=https://auth.example.com/.well-known/jwks.json
+JWT_ISSUER=https://auth.example.com  # Optional: expected "iss" claim
 ```
 
 ### Running Locally
