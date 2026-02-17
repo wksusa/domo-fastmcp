@@ -1,4 +1,4 @@
-"""Vercel serverless function endpoint for Domo MCP server."""
+"""Vercel serverless endpoint — Bearer token authentication."""
 
 import os
 
@@ -11,40 +11,16 @@ from domo_mcp.logger import Logger
 from domo_mcp.request_filter import RequestFilterMiddleware
 from domo_mcp.server_factory import create_server
 
-
 logger = Logger()
 
-# ============================================================================
-# Auth mode selection
-# ============================================================================
-
-AUTH_MODE = os.getenv("AUTH_MODE", "bearer")
 tokens_str = os.getenv("MCP_AUTH_TOKENS", "")
-
-logger.info(f"AUTH_MODE={AUTH_MODE!r}, auth verifier type: creating...")
-
-auth = create_auth(AUTH_MODE, tokens_str)
+auth = create_auth("bearer", tokens_str)
 mcp = create_server(auth=auth)
 
-logger.info(f"Auth verifier: {type(auth).__name__ if auth else 'None (no auth)'}")
-
-# Log auth mode
-if AUTH_MODE == "jwt":
-    jwt_key = os.getenv("JWT_PUBLIC_KEY", "")
-    jwks_uri = os.getenv("JWT_JWKS_URI", "")
-    logger.info(f"JWT auth enabled — JWT_PUBLIC_KEY={'set' if jwt_key else 'unset'}, JWT_JWKS_URI={'set' if jwks_uri else 'unset'}")
-elif AUTH_MODE == "bearer":
-    if auth:
-        logger.info("Bearer auth enabled via ConstantTimeTokenVerifier")
-    else:
-        logger.warning("AUTH_MODE=bearer but no MCP_AUTH_TOKENS set — auth disabled")
+if auth:
+    logger.info("Bearer auth enabled via ConstantTimeTokenVerifier")
 else:
-    logger.warning("AUTH_MODE=none — authentication disabled")
-
-
-# ============================================================================
-# ASGI App for Vercel
-# ============================================================================
+    logger.warning("No MCP_AUTH_TOKENS set — bearer auth disabled (no auth)")
 
 middleware = [
     Middleware(
@@ -55,10 +31,9 @@ middleware = [
     )
 ]
 
-# Create the ASGI app
 _event_store = EventStore()
 app = mcp.http_app(
-    path="/api/mcp",
+    path="/mcp",
     middleware=middleware,
     stateless_http=True,
     json_response=True,
@@ -66,5 +41,4 @@ app = mcp.http_app(
     retry_interval=2000,
 )
 
-# Wrap with request filter middleware (strips extra fields from tool calls)
 app = RequestFilterMiddleware(app)

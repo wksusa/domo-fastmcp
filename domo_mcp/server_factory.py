@@ -49,12 +49,17 @@ def create_server(auth=None) -> FastMCP:
     domo_client = DomoClient(logger)
     user_resolver = UserResolver(domo_client)
 
-    async def _resolve_user() -> str | None:
-        """Resolve JWT email to Domo user ID. Returns None if no auth context."""
+    async def _resolve_user() -> tuple[str | None, str | None]:
+        """Resolve JWT email to Domo user ID.
+
+        Returns:
+            (user_id, email) tuple. user_id is None if not found.
+        """
         email = get_user_email()
         if not email:
-            return None
-        return await user_resolver.resolve(email)
+            return None, None
+        user_id = await user_resolver.resolve(email)
+        return user_id, email
 
     @mcp.tool()
     async def get_dataset_schema(dataset_id: str) -> str:
@@ -72,11 +77,10 @@ def create_server(auth=None) -> FastMCP:
             return _validation_error_response(e)
 
         # PDP check
-        email = get_user_email()
-        if email:
-            user_id = await _resolve_user()
-            if not user_id:
-                return _access_denied("Your account is not linked to a Domo account")
+        user_id, email = await _resolve_user()
+        if email and not user_id:
+            return _access_denied(f"No Domo account linked to '{email}'")
+        if user_id:
             details = await domo_client.get_dataset_details(validated.dataset_id)
             if details and not await check_dataset_access(user_id, details, domo_client):
                 return _access_denied()
@@ -102,11 +106,10 @@ def create_server(auth=None) -> FastMCP:
             return _validation_error_response(e)
 
         # PDP check
-        email = get_user_email()
-        if email:
-            user_id = await _resolve_user()
-            if not user_id:
-                return _access_denied("Your account is not linked to a Domo account")
+        user_id, email = await _resolve_user()
+        if email and not user_id:
+            return _access_denied(f"No Domo account linked to '{email}'")
+        if user_id:
             details = await domo_client.get_dataset_details(validated.dataset_id)
             if details and not await check_dataset_access(user_id, details, domo_client):
                 return _access_denied()
@@ -134,11 +137,10 @@ def create_server(auth=None) -> FastMCP:
             return _validation_error_response(e)
 
         # PDP check
-        email = get_user_email()
-        if email:
-            user_id = await _resolve_user()
-            if not user_id:
-                return _access_denied("Your account is not linked to a Domo account")
+        user_id, email = await _resolve_user()
+        if email and not user_id:
+            return _access_denied(f"No Domo account linked to '{email}'")
+        if user_id:
             details = await domo_client.get_dataset_details(validated_id.dataset_id)
             if details and not await check_dataset_access(user_id, details, domo_client):
                 return _access_denied()
@@ -170,11 +172,10 @@ def create_server(auth=None) -> FastMCP:
         logger.info("Datasets searched successfully.")
 
         # PDP filter: only return datasets user can access
-        email = get_user_email()
-        if email and isinstance(result, list):
-            user_id = await _resolve_user()
-            if not user_id:
-                return _access_denied("Your account is not linked to a Domo account")
+        user_id, email = await _resolve_user()
+        if email and not user_id:
+            return _access_denied(f"No Domo account linked to '{email}'")
+        if user_id and isinstance(result, list):
             result = await filter_accessible_datasets(user_id, result, domo_client)
 
         return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)

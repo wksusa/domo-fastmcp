@@ -2,13 +2,11 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "version": 2,
   "rewrites": [
-    { "source": "/mcp/:path*", "destination": "/api/mcp" },
     { "source": "/mcp", "destination": "/api/mcp" },
-    { "source": "/mcp-open/:path*", "destination": "/api/mcp_open" },
-    { "source": "/mcp-open", "destination": "/api/mcp_open" }
+    { "source": "/mcp-jwt", "destination": "/api/mcp_jwt" }
   ],
   "functions": {
     "api/mcp.py": { "maxDuration": 120 },
-    "api/mcp_open.py": { "maxDuration": 120 }
+    "api/mcp_jwt.py": { "maxDuration": 120 }
   }
 }

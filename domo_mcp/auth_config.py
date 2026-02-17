@@ -12,6 +12,7 @@ import os
 import re
 
 from fastmcp.server.auth import JWTVerifier
+from fastmcp.server.auth.jwt_issuer import derive_jwt_key
 
 from .logger import Logger
 from .token_verifier import ConstantTimeTokenVerifier
@@ -66,6 +67,15 @@ def _create_jwt_verifier() -> JWTVerifier:
         )
 
     algorithm = _detect_algorithm(public_key, jwks_uri)
+
+    # When using HS256 (shared secret), the gateway signs JWTs using
+    # derive_jwt_key() (PBKDF2). We must derive the same key here so
+    # verification matches.
+    if algorithm == "HS256" and public_key:
+        public_key = derive_jwt_key(
+            low_entropy_material=public_key,
+            salt="fastmcp-jwt-signing-key",
+        ).decode()
 
     return JWTVerifier(
         public_key=public_key,
