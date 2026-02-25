@@ -1,6 +1,4 @@
-"""Vercel serverless endpoint — auth mode selected via AUTH_MODE env var."""
-
-import os
+"""Vercel serverless endpoint — JWT authentication."""
 
 from fastmcp.server.event_store import EventStore
 from starlette.middleware import Middleware
@@ -13,15 +11,14 @@ from domo_mcp.server_factory import create_server
 
 logger = Logger()
 
-auth_mode = os.getenv("AUTH_MODE", "bearer")
-tokens_str = os.getenv("MCP_AUTH_TOKENS", "")
-auth = create_auth(auth_mode, tokens_str)
-mcp = create_server(auth=auth)
+try:
+    auth = create_auth("jwt")
+    logger.info("JWT auth enabled on /mcp-jwt endpoint")
+except ValueError as e:
+    logger.warning(f"JWT auth not configured ({e}) — /mcp-jwt endpoint disabled")
+    auth = None
 
-if auth:
-    logger.info(f"Auth enabled — mode={auth_mode}")
-else:
-    logger.warning("No auth configured (AUTH_MODE=none or missing tokens)")
+mcp = create_server(auth=auth)
 
 middleware = [
     Middleware(
@@ -34,7 +31,7 @@ middleware = [
 
 _event_store = EventStore()
 app = mcp.http_app(
-    path="/mcp",
+    path="/api/mcp_jwt",
     middleware=middleware,
     stateless_http=True,
     json_response=True,

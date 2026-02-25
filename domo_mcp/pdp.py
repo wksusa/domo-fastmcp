@@ -25,7 +25,11 @@ async def _get_group_members(group_id: str, domo_client) -> set[str]:
             return _group_cache[group_id]
 
         users = await domo_client.list_group_users(group_id)
-        member_ids = {str(u.get("id", "")) for u in (users or []) if u.get("id")}
+        member_ids = {
+            str(u.get("id", ""))
+            for u in (users or [])
+            if isinstance(u, dict) and u.get("id")
+        }
         _group_cache[group_id] = member_ids
         _group_cache_time[group_id] = now
         return member_ids
@@ -51,6 +55,10 @@ async def check_dataset_access(user_id: str, dataset_details: dict, domo_client)
         return False
 
     for policy in policies:
+        # Skip non-dict entries (e.g. policy IDs returned by some API versions)
+        if not isinstance(policy, dict):
+            continue
+
         # Check direct user assignment
         policy_users = policy.get("users", [])
         if int(user_id) in policy_users:
