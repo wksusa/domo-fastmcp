@@ -1,4 +1,4 @@
-"""Vercel serverless endpoint — Bearer token authentication."""
+"""Vercel serverless endpoint — auth mode selected via AUTH_MODE env var."""
 
 import os
 
@@ -13,14 +13,15 @@ from domo_mcp.server_factory import create_server
 
 logger = Logger()
 
+auth_mode = os.getenv("AUTH_MODE", "bearer")
 tokens_str = os.getenv("MCP_AUTH_TOKENS", "")
-auth = create_auth("bearer", tokens_str)
+auth = create_auth(auth_mode, tokens_str)
 mcp = create_server(auth=auth)
 
 if auth:
-    logger.info("Bearer auth enabled via ConstantTimeTokenVerifier")
+    logger.info(f"Auth enabled — mode={auth_mode}")
 else:
-    logger.warning("No MCP_AUTH_TOKENS set — bearer auth disabled (no auth)")
+    logger.warning("No auth configured (AUTH_MODE=none or missing tokens)")
 
 middleware = [
     Middleware(
