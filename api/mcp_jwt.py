@@ -31,7 +31,7 @@ middleware = [
 
 _event_store = EventStore()
 app = mcp.http_app(
-    path="/mcp-jwt",
+    path="/api/mcp_jwt",
     middleware=middleware,
     stateless_http=True,
     json_response=True,

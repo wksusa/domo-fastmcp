@@ -60,6 +60,8 @@ class UserResolver:
                 if not users:
                     break
                 for user in users:
+                    if not isinstance(user, dict):
+                        continue
                     email = user.get("email", "").lower()
                     user_id = str(user.get("id", ""))
                     if email and user_id:

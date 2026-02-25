@@ -27,6 +27,9 @@ def get_user_email() -> str | None:
     claim_keys = list(claims.keys())
     logger.info(f"get_user_email: JWT claim keys: {claim_keys}")
     upstream = claims.get("upstream_claims", {})
+    if not isinstance(upstream, dict):
+        logger.warning(f"get_user_email: upstream_claims is {type(upstream).__name__}, not dict: {upstream!r}")
+        upstream = {}
     if upstream:
         logger.info(f"get_user_email: upstream_claims keys: {list(upstream.keys())}")
     email = upstream.get("email") or claims.get("email")

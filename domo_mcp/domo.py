@@ -288,9 +288,18 @@ class DomoClient:
                     "sort": {"isRelevance": False, "fieldSorts": [{"field": "create_date", "sortOrder": "DESC"}]},
                 }
                 data = await self.make_request("/data/ui/v3/datasources/search", "POST", data=payload)
-                if data:
-                    return [{"id": ds["id"], "name": ds["name"]} for ds in data.get("dataSources", [])]
-                return []
+                if not data:
+                    return []
+                if not isinstance(data, dict):
+                    self.logger.error(
+                        f"Unexpected search response type: {type(data).__name__}, value: {str(data)[:200]}"
+                    )
+                    return []
+                return [
+                    {"id": ds["id"], "name": ds["name"]}
+                    for ds in data.get("dataSources", [])
+                    if isinstance(ds, dict)
+                ]
             else:
                 # OAuth mode: public API doesn't have search, so list and filter client-side
                 all_datasets = []
@@ -301,8 +310,15 @@ class DomoClient:
                     data = await self.make_request(url, "GET")
                     if not data:
                         break
+                    if not isinstance(data, list):
+                        self.logger.error(
+                            f"Unexpected datasets response type: {type(data).__name__}"
+                        )
+                        break
 
                     for ds in data:
+                        if not isinstance(ds, dict):
+                            continue
                         name = ds.get("name", "")
                         if query_lower in name.lower():
                             all_datasets.append({"id": ds.get("id"), "name": name})

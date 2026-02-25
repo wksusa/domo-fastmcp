@@ -1,6 +1,7 @@
 """Shared server factory — defines all tools once, used by both stdio and HTTP modes."""
 
 import json
+import traceback
 from typing import Optional
 
 from fastmcp import FastMCP
@@ -167,18 +168,23 @@ def create_server(auth=None) -> FastMCP:
         except ValidationError as e:
             return _validation_error_response(e)
 
-        logger.info(f"Searching datasets with query: {validated.query}")
-        result = await domo_client.search_datasets(query=validated.query)
-        logger.info("Datasets searched successfully.")
+        try:
+            logger.info(f"Searching datasets with query: {validated.query}")
+            result = await domo_client.search_datasets(query=validated.query)
+            logger.info(f"Datasets searched successfully. result type={type(result).__name__}")
 
-        # PDP filter: only return datasets user can access
-        user_id, email = await _resolve_user()
-        if email and not user_id:
-            return _access_denied(f"No Domo account linked to '{email}'")
-        if user_id and isinstance(result, list):
-            result = await filter_accessible_datasets(user_id, result, domo_client)
+            # PDP filter: only return datasets user can access
+            user_id, email = await _resolve_user()
+            logger.info(f"search_datasets: user_id={user_id}, email={email}")
+            if email and not user_id:
+                return _access_denied(f"No Domo account linked to '{email}'")
+            if user_id and isinstance(result, list):
+                result = await filter_accessible_datasets(user_id, result, domo_client)
 
-        return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
+            return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
+        except Exception:
+            logger.error(f"search_datasets error:\n{traceback.format_exc()}")
+            raise
 
     @mcp.tool()
     async def list_roles() -> str:

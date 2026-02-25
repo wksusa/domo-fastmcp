@@ -15,7 +15,7 @@ from fastmcp.server.auth import JWTVerifier
 from fastmcp.server.auth.jwt_issuer import derive_jwt_key
 
 from .logger import Logger
-from .token_verifier import ConstantTimeTokenVerifier
+from .token_verifier import CompositeVerifier, ConstantTimeTokenVerifier
 
 logger = Logger()
 
@@ -24,7 +24,7 @@ EMAIL_PATTERN = re.compile(r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")
 
 def create_auth(
     mode: str | None, tokens_str: str = ""
-) -> JWTVerifier | ConstantTimeTokenVerifier | None:
+) -> JWTVerifier | ConstantTimeTokenVerifier | CompositeVerifier | None:
     """Create an auth verifier based on the specified mode.
 
     Args:
@@ -36,10 +36,17 @@ def create_auth(
 
     Returns:
         JWTVerifier for jwt mode, ConstantTimeTokenVerifier for bearer mode,
+        CompositeVerifier when jwt mode + bearer tokens are both set (JWT
+        checked first, bearer tokens as fallback for service accounts),
         None for none mode or bearer with no tokens.
     """
     if mode == "jwt":
-        return _create_jwt_verifier()
+        jwt_verifier = _create_jwt_verifier()
+        if tokens_str:
+            bearer_verifier = _create_bearer_verifier(tokens_str)
+            logger.info("Auth enabled — mode=jwt+bearer (composite)")
+            return CompositeVerifier(jwt_verifier, bearer_verifier)
+        return jwt_verifier
     if mode == "bearer" and tokens_str:
         return _create_bearer_verifier(tokens_str)
     return None
