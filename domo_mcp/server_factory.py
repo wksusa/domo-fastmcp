@@ -142,10 +142,10 @@ def create_server(auth=None) -> FastMCP:
             return _validation_error_response(e)
 
         # PDP check
-        user_id, email = await _resolve_user()
+        user_id, email, is_admin = await _resolve_user()
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
-        if user_id:
+        if user_id and not is_admin:
             details = await domo_client.get_dataset_details(validated_id.dataset_id)
             if details and not await check_dataset_access(user_id, details, domo_client):
                 return _access_denied()
