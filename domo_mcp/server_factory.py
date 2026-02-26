@@ -50,17 +50,21 @@ def create_server(auth=None) -> FastMCP:
     domo_client = DomoClient(logger)
     user_resolver = UserResolver(domo_client)
 
-    async def _resolve_user() -> tuple[str | None, str | None]:
-        """Resolve JWT email to Domo user ID.
+    async def _resolve_user() -> tuple[str | None, str | None, bool]:
+        """Resolve JWT email to Domo user ID and admin status.
 
         Returns:
-            (user_id, email) tuple. user_id is None if not found.
+            (user_id, email, is_admin) tuple. user_id is None if not found.
+            is_admin is True for Domo Admin/Privileged roles — these bypass PDP.
         """
         email = get_user_email()
         if not email:
-            return None, None
+            return None, None, False
         user_id = await user_resolver.resolve(email)
-        return user_id, email
+        is_admin = user_resolver.is_admin(email)
+        if is_admin:
+            logger.info(f"_resolve_user: {email} has admin role — PDP check bypassed")
+        return user_id, email, is_admin
 
     @mcp.tool()
     async def get_dataset_schema(dataset_id: str) -> str:
@@ -78,10 +82,10 @@ def create_server(auth=None) -> FastMCP:
             return _validation_error_response(e)
 
         # PDP check
-        user_id, email = await _resolve_user()
+        user_id, email, is_admin = await _resolve_user()
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
-        if user_id:
+        if user_id and not is_admin:
             details = await domo_client.get_dataset_details(validated.dataset_id)
             if details and not await check_dataset_access(user_id, details, domo_client):
                 return _access_denied()
@@ -107,10 +111,10 @@ def create_server(auth=None) -> FastMCP:
             return _validation_error_response(e)
 
         # PDP check
-        user_id, email = await _resolve_user()
+        user_id, email, is_admin = await _resolve_user()
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
-        if user_id:
+        if user_id and not is_admin:
             details = await domo_client.get_dataset_details(validated.dataset_id)
             if details and not await check_dataset_access(user_id, details, domo_client):
                 return _access_denied()
@@ -174,11 +178,11 @@ def create_server(auth=None) -> FastMCP:
             logger.info(f"Datasets searched successfully. result type={type(result).__name__}")
 
             # PDP filter: only return datasets user can access
-            user_id, email = await _resolve_user()
-            logger.info(f"search_datasets: user_id={user_id}, email={email}")
+            user_id, email, is_admin = await _resolve_user()
+            logger.info(f"search_datasets: user_id={user_id}, email={email}, is_admin={is_admin}")
             if email and not user_id:
                 return _access_denied(f"No Domo account linked to '{email}'")
-            if user_id and isinstance(result, list):
+            if user_id and not is_admin and isinstance(result, list):
                 result = await filter_accessible_datasets(user_id, result, domo_client)
 
             return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)

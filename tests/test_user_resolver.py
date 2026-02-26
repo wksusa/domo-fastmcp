@@ -72,3 +72,29 @@ class TestUserResolver:
         resolver = UserResolver(mock_domo_client)
         result = await resolver.resolve("user@example.com")
         assert result is None
+
+    @pytest.mark.asyncio
+    async def test_is_admin_for_admin_role(self, mock_domo_client):
+        mock_domo_client.list_users.return_value = [
+            {"id": 1, "email": "admin@example.com", "role": "Admin"},
+            {"id": 2, "email": "editor@example.com", "role": "Editor"},
+        ]
+        resolver = UserResolver(mock_domo_client)
+        await resolver.resolve("admin@example.com")
+        assert resolver.is_admin("admin@example.com") is True
+        assert resolver.is_admin("editor@example.com") is False
+
+    @pytest.mark.asyncio
+    async def test_is_admin_for_privileged_role(self, mock_domo_client):
+        mock_domo_client.list_users.return_value = [
+            {"id": 1, "email": "priv@example.com", "role": "Privileged"},
+        ]
+        resolver = UserResolver(mock_domo_client)
+        await resolver.resolve("priv@example.com")
+        assert resolver.is_admin("priv@example.com") is True
+
+    @pytest.mark.asyncio
+    async def test_is_admin_unknown_email_returns_false(self, mock_domo_client):
+        mock_domo_client.list_users.return_value = []
+        resolver = UserResolver(mock_domo_client)
+        assert resolver.is_admin("nobody@example.com") is False
