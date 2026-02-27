@@ -7,6 +7,7 @@ from typing import Optional
 from fastmcp import FastMCP
 from pydantic import ValidationError
 
+from .code_executor import execute as _execute_code
 from .domo import DomoClient
 from .identity import get_user_email
 from .logger import Logger
@@ -252,5 +253,47 @@ def create_server(auth=None) -> FastMCP:
         result = await domo_client.list_role_authorities(role_id=validated.role_id)
         logger.info("Authorities listed successfully.")
         return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
+
+    @mcp.tool()
+    async def run_python(code: str, data: str = "") -> str:
+        """Execute Python code to compute analytics on data returned by query_dataset.
+
+        Use this after fetching data with query_dataset when you need calculations
+        that are more reliable in code than in your head: YoY change columns,
+        percentage deltas, totals, averages, pivots, rankings, etc.
+
+        Args:
+            code: Python source to execute. Use `print()` for all output — that's
+                  what gets returned. Available: pd (pandas), json, math, statistics,
+                  collections, decimal. The `data` variable holds parsed input data.
+                  No file, network, or OS access is allowed.
+            data: JSON string of data to operate on (e.g. the raw result from
+                  query_dataset). Available in code as `data` (already parsed).
+
+        Returns:
+            Captured stdout from the code, or an error message.
+
+        Example:
+            code = '''
+            import json
+            rows = data  # list of dicts from query_dataset
+            df = pd.DataFrame(rows)
+            df["change"] = df["FY2025"] - df["FY2024"]
+            df["change_pct"] = (df["change"] / df["FY2024"] * 100).round(1)
+            print(df.to_string(index=False))
+            '''
+            data = '[{"FiscalPrd": 10, "FY2024": 2733551, "FY2025": 9895014}, ...]'
+        """
+        parsed_data: object = None
+        if data:
+            try:
+                parsed_data = json.loads(data)
+            except json.JSONDecodeError as e:
+                return json.dumps({"error": f"Invalid JSON in data argument: {e}"})
+
+        logger.info(f"run_python: executing {len(code)} chars of code")
+        result = _execute_code(code, parsed_data)
+        logger.info(f"run_python: output length={len(result)}")
+        return result
 
     return mcp
