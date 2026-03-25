@@ -1,6 +1,5 @@
 # Requirements for the Domo MCP Server
-# After mcp-gateway merges packages/mcp-auth to main, pin: .../mcp-gateway.git#subdirectory=packages/mcp-auth
-wks-mcp-auth @ git+https://github.com/wksusa/mcp-gateway.git@feat/mcp-auth-package#subdirectory=packages/mcp-auth
+wks-mcp-auth @ git+https://github.com/wksusa/mcp-gateway.git#subdirectory=packages/mcp-auth
 httpx>=0.25.0
 python-dotenv>=1.0.0
 fastmcp>=3.0.0rc2
