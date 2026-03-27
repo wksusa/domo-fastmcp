@@ -113,3 +113,52 @@ class CreateRoleInput(BaseModel):
                 raise ValueError("Description is too long (max 1000 characters)")
             return v if v else None
         return v
+
+
+class AccessTokenId(BaseModel):
+    """Validated access token ID."""
+
+    token_id: int = Field(description="The access token ID (positive integer)")
+
+    @field_validator("token_id")
+    @classmethod
+    def validate_token_id(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Token ID must be a positive integer")
+        return v
+
+
+class CreateAccessTokenInput(BaseModel):
+    """Validated input for creating an access token."""
+
+    name: str = Field(description="Display name for the access token")
+    owner_id: int = Field(description="Domo user ID who will own the token")
+    expires_in_days: int = Field(
+        default=365, description="Token lifetime in days (default 1 year)"
+    )
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("Token name cannot be empty")
+        v = v.strip()
+        if len(v) > 200:
+            raise ValueError("Token name is too long (max 200 characters)")
+        return v
+
+    @field_validator("owner_id")
+    @classmethod
+    def validate_owner_id(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Owner ID must be a positive integer")
+        return v
+
+    @field_validator("expires_in_days")
+    @classmethod
+    def validate_expires_in_days(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError("Expiration must be at least 1 day")
+        if v > 3650:
+            raise ValueError("Expiration cannot exceed 3650 days (~10 years)")
+        return v

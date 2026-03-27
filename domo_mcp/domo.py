@@ -427,3 +427,50 @@ class DomoClient:
         except Exception as e:
             self.logger.error(f"Error listing group users: {str(e)}")
             return []
+
+    async def list_access_tokens(self) -> list[dict]:
+        """List all access tokens in the Domo instance."""
+        try:
+            url = "/data/v1/accesstokens"
+            data = await self.make_request(url, "GET")
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            self.logger.error(f"Error listing access tokens: {str(e)}")
+            return []
+
+    async def create_access_token(self, name: str, owner_id: int, expires: int) -> dict | None:
+        """Create an access token for a Domo user.
+
+        Args:
+            name: Display name for the token.
+            owner_id: Domo user ID who will own the token.
+            expires: Expiration timestamp in epoch milliseconds.
+
+        Returns:
+            Dict with token details (including the token value), or None on error.
+        """
+        try:
+            url = "/data/v1/accesstokens"
+            payload = {"name": name, "ownerId": owner_id, "expires": expires}
+            data = await self.make_request(url, "POST", data=payload)
+            return data if isinstance(data, dict) else None
+        except Exception as e:
+            self.logger.error(f"Error creating access token: {str(e)}")
+            return None
+
+    async def delete_access_token(self, token_id: int) -> bool:
+        """Delete (revoke) an access token.
+
+        Args:
+            token_id: The ID of the access token to delete.
+
+        Returns:
+            True if deleted successfully, False on error.
+        """
+        try:
+            url = f"/data/v1/accesstokens/{token_id}"
+            await self.make_request(url, "DELETE")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error deleting access token: {str(e)}")
+            return False

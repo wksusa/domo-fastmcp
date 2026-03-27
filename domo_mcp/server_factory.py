@@ -1,6 +1,7 @@
 """Shared server factory — defines all tools once, used by both stdio and HTTP modes."""
 
 import json
+import time
 import traceback
 from typing import Optional
 
@@ -14,6 +15,8 @@ from .logger import Logger
 from .pdp import check_dataset_access, filter_accessible_datasets
 from .user_resolver import UserResolver
 from .validation import (
+    AccessTokenId,
+    CreateAccessTokenInput,
     CreateRoleInput,
     DatasetId,
     RoleId,
@@ -295,5 +298,71 @@ def create_server(auth=None) -> FastMCP:
         result = _execute_code(code, parsed_data)
         logger.info(f"run_python: output length={len(result)}")
         return result
+
+    @mcp.tool()
+    async def list_access_tokens() -> str:
+        """List all access tokens in the Domo instance.
+
+        Returns:
+            JSON string containing all access tokens with their IDs, names, owners, and expiration dates.
+        """
+        logger.info("Listing all access tokens")
+        result = await domo_client.list_access_tokens()
+        logger.info(f"Access tokens listed successfully. count={len(result)}")
+        return json.dumps(result, indent=2) if isinstance(result, list) else str(result)
+
+    @mcp.tool()
+    async def create_access_token(name: str, owner_id: int, expires_in_days: int = 365) -> str:
+        """Create an access token for a Domo user.
+
+        IMPORTANT: The token value is only returned once at creation time — store it securely.
+
+        Args:
+            name: Display name for the token.
+            owner_id: The Domo user ID who will own the token.
+            expires_in_days: Token lifetime in days (default 365, max 3650).
+
+        Returns:
+            JSON string containing the created token details, including the token value.
+        """
+        try:
+            validated = CreateAccessTokenInput(
+                name=name, owner_id=owner_id, expires_in_days=expires_in_days
+            )
+        except ValidationError as e:
+            return _validation_error_response(e)
+
+        expires_ms = int((time.time() + validated.expires_in_days * 86400) * 1000)
+
+        logger.info(f"Creating access token '{validated.name}' for owner {validated.owner_id}")
+        result = await domo_client.create_access_token(
+            name=validated.name, owner_id=validated.owner_id, expires=expires_ms
+        )
+        if result is None:
+            return json.dumps({"error": "Failed to create access token"})
+        logger.info("Access token created successfully.")
+        return json.dumps(result, indent=2)
+
+    @mcp.tool()
+    async def delete_access_token(token_id: int) -> str:
+        """Delete (revoke) an access token by its ID.
+
+        Args:
+            token_id: The ID of the access token to delete.
+
+        Returns:
+            JSON string confirming deletion or an error message.
+        """
+        try:
+            validated = AccessTokenId(token_id=token_id)
+        except ValidationError as e:
+            return _validation_error_response(e)
+
+        logger.info(f"Deleting access token: {validated.token_id}")
+        success = await domo_client.delete_access_token(token_id=validated.token_id)
+        if success:
+            logger.info("Access token deleted successfully.")
+            return json.dumps({"success": True, "message": f"Token {validated.token_id} deleted"})
+        return json.dumps({"error": f"Failed to delete token {validated.token_id}"})
 
     return mcp
