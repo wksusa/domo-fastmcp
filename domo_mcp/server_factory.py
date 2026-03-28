@@ -9,10 +9,9 @@ from fastmcp import FastMCP
 from pydantic import ValidationError
 
 from .code_executor import execute as _execute_code
-from .domo import DomoClient
-from .identity import get_user_email
+from .domo import DomoClient, DomoRequestError
+from .identity import get_user_email, is_jwt_auth
 from .logger import Logger
-from .pdp import check_dataset_access, filter_accessible_datasets
 from .user_resolver import UserResolver
 from .validation import (
     AccessTokenId,
@@ -147,17 +146,41 @@ def create_server(auth=None) -> FastMCP:
         except ValidationError as e:
             return _validation_error_response(e)
 
-        # PDP check
         user_id, email, is_admin = await _resolve_user()
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
-        if user_id and not is_admin:
-            details = await domo_client.get_dataset_details(validated.dataset_id)
-            if details and not await check_dataset_access(user_id, details, domo_client):
-                return _access_denied()
+
+        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        override_token = None
+        if user_id and not is_admin and is_jwt_auth():
+            try:
+                override_token = await _get_user_token(user_id)
+            except RuntimeError as e:
+                return _access_denied(str(e))
 
         logger.info(f"Getting schema for dataset: {validated.dataset_id}")
-        result = await domo_client.get_dataset_schema(dataset_id=validated.dataset_id)
+        if override_token:
+            try:
+                result = await domo_client.get_dataset_schema(
+                    dataset_id=validated.dataset_id, override_token=override_token
+                )
+            except DomoRequestError as e:
+                if e.status_code == 401:
+                    await _invalidate_user_token(user_id)
+                    try:
+                        override_token = await _get_user_token(user_id)
+                        result = await domo_client.get_dataset_schema(
+                            dataset_id=validated.dataset_id, override_token=override_token
+                        )
+                    except (DomoRequestError, RuntimeError):
+                        return _access_denied("Authentication failed after token refresh")
+                elif e.status_code == 403:
+                    return _access_denied("You don't have permission to view this dataset's schema")
+                else:
+                    return _access_denied(f"Domo API error ({e.status_code}) fetching schema")
+        else:
+            result = await domo_client.get_dataset_schema(dataset_id=validated.dataset_id)
+
         logger.info("Schema fetched successfully.")
         return json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
 
@@ -176,17 +199,41 @@ def create_server(auth=None) -> FastMCP:
         except ValidationError as e:
             return _validation_error_response(e)
 
-        # PDP check
         user_id, email, is_admin = await _resolve_user()
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
-        if user_id and not is_admin:
-            details = await domo_client.get_dataset_details(validated.dataset_id)
-            if details and not await check_dataset_access(user_id, details, domo_client):
-                return _access_denied()
+
+        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        override_token = None
+        if user_id and not is_admin and is_jwt_auth():
+            try:
+                override_token = await _get_user_token(user_id)
+            except RuntimeError as e:
+                return _access_denied(str(e))
 
         logger.info(f"Getting metadata for dataset: {validated.dataset_id}")
-        result = await domo_client.get_dataset_metadata(dataset_id=validated.dataset_id)
+        if override_token:
+            try:
+                result = await domo_client.get_dataset_metadata(
+                    dataset_id=validated.dataset_id, override_token=override_token
+                )
+            except DomoRequestError as e:
+                if e.status_code == 401:
+                    await _invalidate_user_token(user_id)
+                    try:
+                        override_token = await _get_user_token(user_id)
+                        result = await domo_client.get_dataset_metadata(
+                            dataset_id=validated.dataset_id, override_token=override_token
+                        )
+                    except (DomoRequestError, RuntimeError):
+                        return _access_denied("Authentication failed after token refresh")
+                elif e.status_code == 403:
+                    return _access_denied("You don't have permission to access this dataset's metadata")
+                else:
+                    return _access_denied(f"Domo API error ({e.status_code}) fetching metadata")
+        else:
+            result = await domo_client.get_dataset_metadata(dataset_id=validated.dataset_id)
+
         logger.info("Metadata fetched successfully.")
         return json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
 
@@ -207,25 +254,54 @@ def create_server(auth=None) -> FastMCP:
         except ValidationError as e:
             return _validation_error_response(e)
 
-        # PDP check
         user_id, email, is_admin = await _resolve_user()
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
-        if user_id and not is_admin:
-            details = await domo_client.get_dataset_details(validated_id.dataset_id)
-            if details and not await check_dataset_access(user_id, details, domo_client):
-                return _access_denied()
+
+        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        override_token = None
+        if user_id and not is_admin and is_jwt_auth():
+            try:
+                override_token = await _get_user_token(user_id)
+            except RuntimeError as e:
+                return _access_denied(str(e))
 
         logger.info(f"Querying dataset {validated_id.dataset_id} with SQL: {validated_sql.sql}")
-        result = await domo_client.query_dataset(
-            dataset_id=validated_id.dataset_id, sql=validated_sql.sql
-        )
+        if override_token:
+            try:
+                result = await domo_client.query_dataset(
+                    dataset_id=validated_id.dataset_id, sql=validated_sql.sql,
+                    override_token=override_token,
+                )
+            except DomoRequestError as e:
+                if e.status_code == 401:
+                    await _invalidate_user_token(user_id)
+                    try:
+                        override_token = await _get_user_token(user_id)
+                        result = await domo_client.query_dataset(
+                            dataset_id=validated_id.dataset_id, sql=validated_sql.sql,
+                            override_token=override_token,
+                        )
+                    except (DomoRequestError, RuntimeError):
+                        return _access_denied("Authentication failed after token refresh")
+                elif e.status_code == 403:
+                    return _access_denied("You don't have permission to query this dataset")
+                else:
+                    return _access_denied(f"Domo API error ({e.status_code}) querying dataset")
+        else:
+            result = await domo_client.query_dataset(
+                dataset_id=validated_id.dataset_id, sql=validated_sql.sql
+            )
+
         logger.info("Query executed successfully.")
         return json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
 
     @mcp.tool()
     async def search_datasets(query: str) -> str:
         """Search for datasets in a Domo instance by name.
+
+        Note: Domo's search API does not PDP-filter results. JWT users see all
+        datasets in search but get 403 or filtered rows when actually querying.
 
         Args:
             query: The search query to find datasets by name.
@@ -238,19 +314,43 @@ def create_server(auth=None) -> FastMCP:
         except ValidationError as e:
             return _validation_error_response(e)
 
+        user_id, email, is_admin = await _resolve_user()
+        if email and not user_id:
+            return _access_denied(f"No Domo account linked to '{email}'")
+
+        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        override_token = None
+        if user_id and not is_admin and is_jwt_auth():
+            try:
+                override_token = await _get_user_token(user_id)
+            except RuntimeError as e:
+                return _access_denied(str(e))
+
         try:
             logger.info(f"Searching datasets with query: {validated.query}")
-            result = await domo_client.search_datasets(query=validated.query)
+            if override_token:
+                try:
+                    result = await domo_client.search_datasets(
+                        query=validated.query, override_token=override_token
+                    )
+                except DomoRequestError as e:
+                    if e.status_code == 401:
+                        await _invalidate_user_token(user_id)
+                        try:
+                            override_token = await _get_user_token(user_id)
+                            result = await domo_client.search_datasets(
+                                query=validated.query, override_token=override_token
+                            )
+                        except (DomoRequestError, RuntimeError):
+                            return _access_denied("Authentication failed after token refresh")
+                    elif e.status_code == 403:
+                        return _access_denied("You don't have permission to search datasets")
+                    else:
+                        return _access_denied(f"Domo API error ({e.status_code}) searching datasets")
+            else:
+                result = await domo_client.search_datasets(query=validated.query)
+
             logger.info(f"Datasets searched successfully. result type={type(result).__name__}")
-
-            # PDP filter: only return datasets user can access
-            user_id, email, is_admin = await _resolve_user()
-            logger.info(f"search_datasets: user_id={user_id}, email={email}, is_admin={is_admin}")
-            if email and not user_id:
-                return _access_denied(f"No Domo account linked to '{email}'")
-            if user_id and not is_admin and isinstance(result, list):
-                result = await filter_accessible_datasets(user_id, result, domo_client)
-
             return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
         except Exception:
             logger.error(f"search_datasets error:\n{traceback.format_exc()}")
