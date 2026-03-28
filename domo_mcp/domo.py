@@ -453,16 +453,15 @@ class DomoClient:
             expires: Expiration timestamp in epoch milliseconds.
 
         Returns:
-            Dict with token details (including the token value), or None on error.
+            Dict with token details (including the token value).
+
+        Raises:
+            Exception: Re-raised from make_request — callers need the root cause.
         """
-        try:
-            url = "/data/v1/accesstokens"
-            payload = {"name": name, "ownerId": owner_id, "expires": expires}
-            data = await self.make_request(url, "POST", data=payload)
-            return data if isinstance(data, dict) else None
-        except Exception as e:
-            self.logger.error(f"Error creating access token: {str(e)}")
-            return None
+        url = "/data/v1/accesstokens"
+        payload = {"name": name, "ownerId": owner_id, "expires": expires}
+        data = await self.make_request(url, "POST", data=payload)
+        return data if isinstance(data, dict) else None
 
     async def delete_access_token(self, token_id: int) -> bool:
         """Delete (revoke) an access token.

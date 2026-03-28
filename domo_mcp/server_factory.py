@@ -54,6 +54,68 @@ def create_server(auth=None) -> FastMCP:
     domo_client = DomoClient(logger)
     user_resolver = UserResolver(domo_client)
 
+    # -- Per-user Domo access token cache for native PDP enforcement --
+    # Defined inside create_server() for test isolation — each call gets
+    # an independent cache. On Vercel, the module is loaded once per
+    # warm instance, so caches persist across requests.
+    _token_cache: dict[str, tuple[str, int, float]] = {}  # user_id -> (token, token_id, expires_at)
+    _last_mint: dict[str, float] = {}  # user_id -> monotonic timestamp of last mint
+
+    _TOKEN_CACHE_TTL = 14400  # 4 hours
+    _TOKEN_MINT_COOLDOWN = 10  # seconds — rate limit per user
+    _TOKEN_PRE_EXPIRY_BUFFER = 60  # seconds — treat as expired this far before actual expiry
+
+    async def _get_user_token(user_id: str) -> str:
+        """Get or create a Domo access token for the given user.
+
+        Returns the token value string. Raises RuntimeError on failure.
+        """
+        cached = _token_cache.get(user_id)
+        if cached and time.monotonic() < (cached[2] - _TOKEN_PRE_EXPIRY_BUFFER):
+            return cached[0]
+
+        # Rate limit: reject if minted within cooldown window
+        last = _last_mint.get(user_id, 0)
+        if time.monotonic() - last < _TOKEN_MINT_COOLDOWN:
+            raise RuntimeError(f"Token creation rate-limited for user {user_id}")
+
+        # Evict old token if present (best-effort delete from Domo)
+        if cached:
+            try:
+                await domo_client.delete_access_token(cached[1])
+            except Exception:
+                pass  # best-effort; Domo auto-expires in 1 day
+
+        # Guard against non-numeric user_id
+        try:
+            numeric_id = int(user_id)
+        except ValueError:
+            raise RuntimeError(f"Domo user ID is not numeric: {user_id!r}") from None
+
+        result = await domo_client.create_access_token(
+            name=f"mcp-pdp:{user_id}",
+            owner_id=numeric_id,
+            expires=int((time.time() + 86400) * 1000),  # 1 day in epoch ms
+        )
+        if not result or "token" not in result:
+            raise RuntimeError(f"Failed to create per-user Domo token for user {user_id}")
+
+        token_value = result["token"]
+        token_id = int(result["id"])
+        _token_cache[user_id] = (token_value, token_id, time.monotonic() + _TOKEN_CACHE_TTL)
+        _last_mint[user_id] = time.monotonic()
+        logger.info(f"_get_user_token: created token for user {user_id}")
+        return token_value
+
+    async def _invalidate_user_token(user_id: str) -> None:
+        """Evict and delete token for a user (on auth failure retry)."""
+        cached = _token_cache.pop(user_id, None)
+        if cached:
+            try:
+                await domo_client.delete_access_token(cached[1])
+            except Exception:
+                pass
+
     async def _resolve_user() -> tuple[str | None, str | None, bool]:
         """Resolve JWT email to Domo user ID and admin status.
 
