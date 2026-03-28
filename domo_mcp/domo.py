@@ -35,6 +35,20 @@ CONNECT_TIMEOUT = 10.0  # seconds
 MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10MB
 SLOW_REQUEST_THRESHOLD = 5.0  # seconds
 
+class DomoRequestError(Exception):
+    """Raised when a Domo API request fails with override_token active.
+
+    Callers branch on status_code:
+    - 401 → retry with fresh token
+    - 403 → surface as "access denied"
+    - other → surface as generic error
+    """
+
+    def __init__(self, status_code: int, url: str) -> None:
+        self.status_code = status_code
+        super().__init__(f"Domo API {status_code}: {url}")
+
+
 class DomoClient:
     def __init__(self, logger: logging.Logger):
         """Initialize the DomoClient with environment variables and constants."""
@@ -234,10 +248,49 @@ class DomoClient:
             )
             return None
 
-    async def get_dataset_metadata(self, dataset_id: str) -> str:
-        """Get metadata for a Domo dataset."""
+    async def _request_with_override(
+        self, method: str, url: str, override_token: str, *, data: dict | None = None
+    ) -> dict | None:
+        """Execute a request using a per-user override token.
+
+        Constructs headers with the override token and raises DomoRequestError
+        on HTTP errors (instead of returning None like make_request).
+        Only logs status_code + URL path — never the token or response body.
+        """
+        full_url = f"{self.DOMO_API_BASE}{url}"
+        headers = {
+            "X-DOMO-Developer-Token": override_token,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        start_time = time.time()
         try:
-            url = f"/data/v3/datasources/{dataset_id}?part=core"
+            if method.upper() == "GET":
+                response = await self._http_client.get(full_url, headers=headers)
+            elif method.upper() == "POST":
+                response = await self._http_client.post(full_url, headers=headers, json=data)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            duration = time.time() - start_time
+            self.logger.info(f"{method} {url} completed in {duration:.2f}s (override)")
+
+            response.raise_for_status()
+
+            if not response.content:
+                return None
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            self.logger.warning(f"Per-user token request failed: {e.response.status_code} {url}")
+            raise DomoRequestError(e.response.status_code, url) from e
+
+    async def get_dataset_metadata(self, dataset_id: str, *, override_token: str | None = None) -> str:
+        """Get metadata for a Domo dataset."""
+        url = f"/data/v3/datasources/{dataset_id}?part=core"
+        if override_token:
+            data = await self._request_with_override("GET", url, override_token)
+            return data if data else "Unable to fetch dataset metadata."
+        try:
             data = await self.make_request(url, "GET")
 
             if not data:
@@ -249,10 +302,13 @@ class DomoClient:
             self.logger.error(f"Error fetching dataset metadata: {str(e)}")
             return f"Error fetching dataset metadata: {str(e)}"
 
-    async def get_dataset_schema(self, dataset_id: str) -> str:
+    async def get_dataset_schema(self, dataset_id: str, *, override_token: str | None = None) -> str:
         """Get the schema of a Domo dataset."""
+        url = f"/data/v2/datasources/{dataset_id}/schemas/latest"
+        if override_token:
+            data = await self._request_with_override("GET", url, override_token)
+            return data if data else "Unable to fetch dataset schema."
         try:
-            url = f"/data/v2/datasources/{dataset_id}/schemas/latest"
             data = await self.make_request(url, "GET")
 
             if not data:
@@ -264,10 +320,13 @@ class DomoClient:
             self.logger.error(f"Error fetching dataset schema: {str(e)}")
             return f"Error fetching dataset schema: {str(e)}"
 
-    async def query_dataset(self, dataset_id: str, sql: str) -> str:
+    async def query_dataset(self, dataset_id: str, sql: str, *, override_token: str | None = None) -> str:
         """Query a Domo dataset using SQL."""
+        url = f"/query/v1/execute/{dataset_id}"
+        if override_token:
+            data = await self._request_with_override("POST", url, override_token, data={"sql": sql})
+            return data if data else "Unable to execute query on the dataset."
         try:
-            url = f"/query/v1/execute/{dataset_id}"
             data = await self.make_request(url, "POST", data={"sql": sql})
 
             if not data:
@@ -279,8 +338,13 @@ class DomoClient:
             self.logger.error(f"Error executing query on dataset: {str(e)}")
             return f"Error executing query on dataset: {str(e)}"
 
-    async def search_datasets(self, query: str) -> str:
-        """Search for datasets in a Domo instance by name."""
+    async def search_datasets(self, query: str, *, override_token: str | None = None) -> str:
+        """Search for datasets in a Domo instance by name.
+
+        Note: Domo's internal search API does not PDP-filter results even with
+        per-user tokens. JWT users will see all datasets in search but get 403
+        or filtered rows when actually querying. This is by design — no data leakage.
+        """
         try:
             if self.auth_mode == "developer_token":
                 # Developer Token mode: use internal UI search API (efficient, server-side)
@@ -293,7 +357,11 @@ class DomoClient:
                     "offset": 0,
                     "sort": {"isRelevance": False, "fieldSorts": [{"field": "create_date", "sortOrder": "DESC"}]},
                 }
-                data = await self.make_request("/data/ui/v3/datasources/search", "POST", data=payload)
+                url = "/data/ui/v3/datasources/search"
+                if override_token:
+                    data = await self._request_with_override("POST", url, override_token, data=payload)
+                else:
+                    data = await self.make_request(url, "POST", data=payload)
                 if not data:
                     return []
                 if not isinstance(data, dict):
