@@ -7,6 +7,20 @@ from .logger import Logger
 logger = Logger()
 
 
+def is_jwt_auth() -> bool:
+    """Return True if the current request was authenticated via JWT (not a static bearer token).
+
+    Detection: bearer tokens always get client_id starting with "bearer:" (set by
+    _parse_domo_bearer_tokens and _parse_named_api_keys in auth_config.py).
+    JWT tokens have a different client_id structure.
+    """
+    token = get_access_token()
+    if not token or not token.claims:
+        return False
+    client_id = token.claims.get("client_id", "")
+    return not client_id.startswith("bearer:")
+
+
 def get_user_email() -> str | None:
     """Get the authenticated user's email from the access token.
 
