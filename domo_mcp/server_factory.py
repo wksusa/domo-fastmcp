@@ -465,9 +465,15 @@ def create_server(auth=None) -> FastMCP:
     async def list_access_tokens() -> str:
         """List all access tokens in the Domo instance.
 
+        Requires admin role (Admin or Privileged).
+
         Returns:
             JSON string containing all access tokens with their IDs, names, owners, and expiration dates.
         """
+        _, _, is_admin = await _resolve_user()
+        if not is_admin:
+            return _access_denied("Admin role required to list access tokens")
+
         logger.info("Listing all access tokens")
         result = await domo_client.list_access_tokens()
         logger.info(f"Access tokens listed successfully. count={len(result)}")
@@ -477,6 +483,7 @@ def create_server(auth=None) -> FastMCP:
     async def create_access_token(name: str, owner_id: int, expires_in_days: int = 365) -> str:
         """Create an access token for a Domo user.
 
+        Requires admin role (Admin or Privileged).
         IMPORTANT: The token value is only returned once at creation time — store it securely.
 
         Args:
@@ -487,6 +494,10 @@ def create_server(auth=None) -> FastMCP:
         Returns:
             JSON string containing the created token details, including the token value.
         """
+        _, _, is_admin = await _resolve_user()
+        if not is_admin:
+            return _access_denied("Admin role required to create access tokens")
+
         try:
             validated = CreateAccessTokenInput(
                 name=name, owner_id=owner_id, expires_in_days=expires_in_days
@@ -509,12 +520,18 @@ def create_server(auth=None) -> FastMCP:
     async def delete_access_token(token_id: int) -> str:
         """Delete (revoke) an access token by its ID.
 
+        Requires admin role (Admin or Privileged).
+
         Args:
             token_id: The ID of the access token to delete.
 
         Returns:
             JSON string confirming deletion or an error message.
         """
+        _, _, is_admin = await _resolve_user()
+        if not is_admin:
+            return _access_denied("Admin role required to delete access tokens")
+
         try:
             validated = AccessTokenId(token_id=token_id)
         except ValidationError as e:
