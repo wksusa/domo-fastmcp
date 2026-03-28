@@ -46,6 +46,11 @@ class DomoClient:
             connect=CONNECT_TIMEOUT
         )
 
+        # Persistent HTTP client — reused across all requests to avoid
+        # per-call TCP+TLS handshake overhead (~50-120ms savings per call).
+        # Must be closed via close() during FastMCP lifespan teardown.
+        self._http_client = httpx.AsyncClient(timeout=self.timeout)
+
         # Developer Token auth (preferred - gives access to internal APIs)
         self.developer_token = os.getenv("DOMO_DEVELOPER_TOKEN")
         self.domo_host = os.getenv("DOMO_HOST", "").rstrip("/")
@@ -70,18 +75,22 @@ class DomoClient:
                 "  - DOMO_CLIENT_ID + DOMO_CLIENT_SECRET (for public API only)"
             )
 
-        self._oauth_token = None
-        self._token_expires_at = 0
+        self._oauth_token: str | None = None
+        self._token_expires_at: float = 0
 
         # For Developer Token mode, also check for OAuth credentials
         # needed for public API calls (/v1/users, /v1/datasets, etc.)
         # that only work via api.domo.com with OAuth
         self._public_api_client_id = self.client_id or os.getenv("DOMO_CLIENT_ID")
         self._public_api_client_secret = self.client_secret or os.getenv("DOMO_CLIENT_SECRET")
-        self._public_api_token = None
-        self._public_api_token_expires_at = 0
+        self._public_api_token: str | None = None
+        self._public_api_token_expires_at: float = 0
         if self.auth_mode == "developer_token" and self._public_api_client_id:
             self.logger.info("OAuth credentials available for public API calls (/v1/...)")
+
+    async def close(self):
+        """Close the persistent HTTP client. Call from FastMCP lifespan teardown."""
+        await self._http_client.aclose()
 
     async def _get_headers(self) -> dict:
         """Get request headers based on auth mode."""
@@ -94,17 +103,16 @@ class DomoClient:
         else:
             # OAuth mode - get/refresh token
             if not self._oauth_token or time.time() >= (self._token_expires_at - 60):
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        "https://api.domo.com/oauth/token",
-                        params={"grant_type": "client_credentials", "scope": "data"},
-                        auth=(self.client_id, self.client_secret)
-                    )
-                    response.raise_for_status()
-                    token_data = response.json()
-                    self._oauth_token = token_data["access_token"]
-                    self._token_expires_at = time.time() + token_data.get("expires_in", 3600)
-                    self.logger.info("OAuth token refreshed successfully")
+                response = await self._http_client.post(
+                    "https://api.domo.com/oauth/token",
+                    params={"grant_type": "client_credentials", "scope": "data"},
+                    auth=(self.client_id, self.client_secret)
+                )
+                response.raise_for_status()
+                token_data = response.json()
+                self._oauth_token = token_data["access_token"]
+                self._token_expires_at = time.time() + token_data.get("expires_in", 3600)
+                self.logger.info("OAuth token refreshed successfully")
 
             return {
                 "Authorization": f"Bearer {self._oauth_token}",
@@ -121,17 +129,16 @@ class DomoClient:
             return None
 
         if not self._public_api_token or time.time() >= (self._public_api_token_expires_at - 60):
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    "https://api.domo.com/oauth/token",
-                    params={"grant_type": "client_credentials", "scope": "data user"},
-                    auth=(self._public_api_client_id, self._public_api_client_secret)
-                )
-                response.raise_for_status()
-                token_data = response.json()
-                self._public_api_token = token_data["access_token"]
-                self._public_api_token_expires_at = time.time() + token_data.get("expires_in", 3600)
-                self.logger.info("Public API OAuth token refreshed")
+            response = await self._http_client.post(
+                "https://api.domo.com/oauth/token",
+                params={"grant_type": "client_credentials", "scope": "data user"},
+                auth=(self._public_api_client_id, self._public_api_client_secret)
+            )
+            response.raise_for_status()
+            token_data = response.json()
+            self._public_api_token = token_data["access_token"]
+            self._public_api_token_expires_at = time.time() + token_data.get("expires_in", 3600)
+            self.logger.info("Public API OAuth token refreshed")
 
         return {
             "Authorization": f"Bearer {self._public_api_token}",
@@ -163,46 +170,45 @@ class DomoClient:
         start_time = time.time()
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                if method.upper() == "GET":
-                    response = await client.get(full_url, headers=headers)
-                elif method.upper() == "POST":
-                    response = await client.post(full_url, headers=headers, json=data)
-                elif method.upper() == "DELETE":
-                    response = await client.delete(full_url, headers=headers)
-                else:
-                    raise ValueError(f"Unsupported HTTP method: {method}")
+            if method.upper() == "GET":
+                response = await self._http_client.get(full_url, headers=headers)
+            elif method.upper() == "POST":
+                response = await self._http_client.post(full_url, headers=headers, json=data)
+            elif method.upper() == "DELETE":
+                response = await self._http_client.delete(full_url, headers=headers)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
 
-                # Calculate request duration
-                duration = time.time() - start_time
+            # Calculate request duration
+            duration = time.time() - start_time
 
-                # Log slow requests
-                if duration > SLOW_REQUEST_THRESHOLD:
-                    self.logger.warning(
-                        f"Slow request detected: {method} {url} took {duration:.2f}s"
-                    )
-                else:
-                    self.logger.info(f"{method} {url} completed in {duration:.2f}s")
+            # Log slow requests
+            if duration > SLOW_REQUEST_THRESHOLD:
+                self.logger.warning(
+                    f"Slow request detected: {method} {url} took {duration:.2f}s"
+                )
+            else:
+                self.logger.info(f"{method} {url} completed in {duration:.2f}s")
 
-                response.raise_for_status()
+            response.raise_for_status()
 
-                # Handle empty responses
-                if not response.content:
-                    return None
+            # Handle empty responses
+            if not response.content:
+                return None
 
-                # Check response size
-                response_size = len(response.content)
-                if response_size > MAX_RESPONSE_SIZE:
-                    self.logger.error(
-                        f"Response too large: {response_size} bytes exceeds limit of {MAX_RESPONSE_SIZE} bytes"
-                    )
-                    return None
-                elif response_size > MAX_RESPONSE_SIZE / 2:
-                    self.logger.warning(
-                        f"Large response: {response_size} bytes ({response_size / (1024*1024):.2f}MB)"
-                    )
+            # Check response size
+            response_size = len(response.content)
+            if response_size > MAX_RESPONSE_SIZE:
+                self.logger.error(
+                    f"Response too large: {response_size} bytes exceeds limit of {MAX_RESPONSE_SIZE} bytes"
+                )
+                return None
+            elif response_size > MAX_RESPONSE_SIZE / 2:
+                self.logger.warning(
+                    f"Large response: {response_size} bytes ({response_size / (1024*1024):.2f}MB)"
+                )
 
-                return response.json()
+            return response.json()
         except httpx.TimeoutException as e:
             duration = time.time() - start_time
             self.logger.error(
