@@ -138,7 +138,7 @@ def create_server(auth=None) -> FastMCP:
 
         Returns:
             (user_id, email, is_admin) tuple. user_id is None if not found.
-            is_admin is True for Domo Admin/Privileged roles — these bypass PDP.
+            is_admin is True for Domo Admin/Privileged roles.
         """
         email = get_user_email()
         if not email:
@@ -146,7 +146,7 @@ def create_server(auth=None) -> FastMCP:
         user_id = await user_resolver.resolve(email)
         is_admin = user_resolver.is_admin(email)
         if is_admin:
-            logger.info(f"_resolve_user: {email} has admin role — PDP check bypassed")
+            logger.info(f"_resolve_user: {email} has admin role")
         return user_id, email, is_admin
 
     async def _call_with_pdp_retry(
@@ -190,9 +190,9 @@ def create_server(auth=None) -> FastMCP:
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
 
-        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        # Native PDP: JWT → per-user token (all users, including admins for audit); bearer → service account
         override_token = None
-        if user_id and not is_admin and is_jwt_auth():
+        if user_id and is_jwt_auth():
             try:
                 override_token = await _get_user_token(user_id)
             except RuntimeError as e:
@@ -232,9 +232,9 @@ def create_server(auth=None) -> FastMCP:
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
 
-        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        # Native PDP: JWT → per-user token (all users, including admins for audit); bearer → service account
         override_token = None
-        if user_id and not is_admin and is_jwt_auth():
+        if user_id and is_jwt_auth():
             try:
                 override_token = await _get_user_token(user_id)
             except RuntimeError as e:
@@ -276,9 +276,9 @@ def create_server(auth=None) -> FastMCP:
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
 
-        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        # Native PDP: JWT → per-user token (all users, including admins for audit); bearer → service account
         override_token = None
-        if user_id and not is_admin and is_jwt_auth():
+        if user_id and is_jwt_auth():
             try:
                 override_token = await _get_user_token(user_id)
             except RuntimeError as e:
@@ -324,9 +324,9 @@ def create_server(auth=None) -> FastMCP:
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
 
-        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        # Native PDP: JWT → per-user token (all users, including admins for audit); bearer → service account
         override_token = None
-        if user_id and not is_admin and is_jwt_auth():
+        if user_id and is_jwt_auth():
             try:
                 override_token = await _get_user_token(user_id)
             except RuntimeError as e:
