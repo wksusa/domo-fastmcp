@@ -471,16 +471,6 @@ class DomoClient:
             self.logger.error(f"Error listing users: {str(e)}")
             return []
 
-    async def list_access_tokens(self) -> list[dict]:
-        """List all access tokens in the Domo instance."""
-        try:
-            url = "/data/v1/accesstokens"
-            data = await self.make_request(url, "GET")
-            return data if isinstance(data, list) else []
-        except Exception as e:
-            self.logger.error(f"Error listing access tokens: {str(e)}")
-            return []
-
     async def create_access_token(self, name: str, owner_id: int, expires: int) -> dict | None:
         """Create an access token for a Domo user.
 
