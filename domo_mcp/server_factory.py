@@ -16,8 +16,6 @@ from .identity import get_user_email, is_jwt_auth
 from .logger import Logger
 from .user_resolver import UserResolver
 from .validation import (
-    AccessTokenId,
-    CreateAccessTokenInput,
     CreateRoleInput,
     DatasetId,
     RoleId,
@@ -458,93 +456,8 @@ def create_server(auth=None) -> FastMCP:
         logger.info(f"run_python: output length={len(result)}")
         return result
 
-    @mcp.tool()
-    async def list_access_tokens() -> str:
-        """List all access tokens in the Domo instance.
-
-        Requires admin role (Admin or Privileged).
-
-        Returns:
-            JSON string containing all access tokens with their IDs, names, owners, and expiration dates.
-        """
-        _, email, is_admin = await _resolve_user()
-        if not email:
-            return _access_denied("Authentication required")
-        if not is_admin:
-            return _access_denied("Admin role required to list access tokens")
-
-        logger.info("Listing all access tokens")
-        result = await domo_client.list_access_tokens()
-        logger.info(f"Access tokens listed successfully. count={len(result)}")
-        return json.dumps(result, indent=2) if isinstance(result, list) else str(result)
-
-    @mcp.tool()
-    async def create_access_token(name: str, owner_id: int, expires_in_days: int = 365) -> str:
-        """Create an access token for a Domo user.
-
-        Requires admin role (Admin or Privileged).
-        IMPORTANT: The token value is only returned once at creation time — store it securely.
-
-        Args:
-            name: Display name for the token.
-            owner_id: The Domo user ID who will own the token.
-            expires_in_days: Token lifetime in days (default 365, max 3650).
-
-        Returns:
-            JSON string containing the created token details, including the token value.
-        """
-        _, email, is_admin = await _resolve_user()
-        if not email:
-            return _access_denied("Authentication required")
-        if not is_admin:
-            return _access_denied("Admin role required to create access tokens")
-
-        try:
-            validated = CreateAccessTokenInput(
-                name=name, owner_id=owner_id, expires_in_days=expires_in_days
-            )
-        except ValidationError as e:
-            return _validation_error_response(e)
-
-        expires_ms = int((time.time() + validated.expires_in_days * 86400) * 1000)
-
-        logger.info(f"Creating access token '{validated.name}' for owner {validated.owner_id}")
-        result = await domo_client.create_access_token(
-            name=validated.name, owner_id=validated.owner_id, expires=expires_ms
-        )
-        if result is None:
-            return json.dumps({"error": "Failed to create access token"})
-        logger.info("Access token created successfully.")
-        return json.dumps(result, indent=2)
-
-    @mcp.tool()
-    async def delete_access_token(token_id: int) -> str:
-        """Delete (revoke) an access token by its ID.
-
-        Requires admin role (Admin or Privileged).
-
-        Args:
-            token_id: The ID of the access token to delete.
-
-        Returns:
-            JSON string confirming deletion or an error message.
-        """
-        _, email, is_admin = await _resolve_user()
-        if not email:
-            return _access_denied("Authentication required")
-        if not is_admin:
-            return _access_denied("Admin role required to delete access tokens")
-
-        try:
-            validated = AccessTokenId(token_id=token_id)
-        except ValidationError as e:
-            return _validation_error_response(e)
-
-        logger.info(f"Deleting access token: {validated.token_id}")
-        success = await domo_client.delete_access_token(token_id=validated.token_id)
-        if success:
-            logger.info("Access token deleted successfully.")
-            return json.dumps({"success": True, "message": f"Token {validated.token_id} deleted"})
-        return json.dumps({"error": f"Failed to delete token {validated.token_id}"})
+    # Token management (list/create/delete access tokens) is NOT exposed as MCP tools.
+    # DomoClient methods are used internally by _get_user_token / _invalidate_user_token
+    # for per-user PDP token lifecycle. No external caller should mint or revoke tokens directly.
 
     return mcp
