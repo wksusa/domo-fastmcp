@@ -51,7 +51,11 @@ class UserResolver:
         return user_id
 
     def is_admin(self, email: str) -> bool:
-        """Return True if the user has a Domo role that bypasses PDP (Admin or Privileged)."""
+        """Return True if the user has a Domo role that bypasses PDP (Admin or Privileged).
+
+        Pre-condition: resolve() must have been called first to populate _role_cache.
+        Without a prior resolve(), this always returns False (safe default).
+        """
         role = self._role_cache.get(email.lower(), "")
         return role in self.ADMIN_ROLES
 

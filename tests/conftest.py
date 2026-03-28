@@ -9,7 +9,7 @@ def mock_logger():
 
     class MockLogger:
         def __init__(self):
-            self.messages = {"info": [], "warning": [], "error": []}
+            self.messages = {"info": [], "warning": [], "error": [], "debug": []}
 
         def info(self, message: str) -> None:
             self.messages["info"].append(message)
@@ -19,6 +19,9 @@ def mock_logger():
 
         def error(self, message: str) -> None:
             self.messages["error"].append(message)
+
+        def debug(self, message: str) -> None:
+            self.messages["debug"].append(message)
 
     return MockLogger()
 

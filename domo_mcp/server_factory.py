@@ -1,17 +1,19 @@
 """Shared server factory — defines all tools once, used by both stdio and HTTP modes."""
 
 import json
+import time
 import traceback
-from typing import Optional
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
+from typing import Any
 
 from fastmcp import FastMCP
 from pydantic import ValidationError
 
 from .code_executor import execute as _execute_code
-from .domo import DomoClient
-from .identity import get_user_email
+from .domo import DomoClient, DomoRequestError
+from .identity import get_user_email, is_jwt_auth
 from .logger import Logger
-from .pdp import check_dataset_access, filter_accessible_datasets
 from .user_resolver import UserResolver
 from .validation import (
     CreateRoleInput,
@@ -40,16 +42,96 @@ def create_server(auth=None) -> FastMCP:
     Args:
         auth: Optional auth verifier (e.g. JWTVerifier) to pass to FastMCP.
     """
+    domo_client = DomoClient(logger)
+    user_resolver = UserResolver(domo_client)
+
+    @asynccontextmanager
+    async def lifespan(server):
+        yield
+        await domo_client.close()
+
     mcp = FastMCP(
         name="domo-mcp",
         instructions="""You are connected to a Domo instance. You can query datasets,
         search for datasets, get schema information, and manage roles. Always use the
         appropriate tool based on what the user is asking for.""",
         auth=auth,
+        lifespan=lifespan,
     )
 
-    domo_client = DomoClient(logger)
-    user_resolver = UserResolver(domo_client)
+    # -- Per-user Domo access token cache for native PDP enforcement --
+    # Defined inside create_server() for test isolation — each call gets
+    # an independent cache. On Vercel, the module is loaded once per
+    # warm instance, so caches persist across requests.
+    _token_cache: dict[str, tuple[str, int, float]] = {}  # user_id -> (token, token_id, expires_at)
+    _last_mint: dict[str, float] = {}  # user_id -> monotonic timestamp of last mint
+
+    _TOKEN_CACHE_TTL = 14400  # 4 hours
+    _TOKEN_MINT_COOLDOWN = 10  # seconds — rate limit per user
+    _TOKEN_PRE_EXPIRY_BUFFER = 60  # seconds — treat as expired this far before actual expiry
+    _MAX_CACHE_SIZE = 500
+
+    async def _get_user_token(user_id: str) -> str:
+        """Get or create a Domo access token for the given user.
+
+        Returns the token value string. Raises RuntimeError on failure.
+        """
+        cached = _token_cache.get(user_id)
+        if cached and time.monotonic() < (cached[2] - _TOKEN_PRE_EXPIRY_BUFFER):
+            return cached[0]
+
+        # Rate limit: reject if minted within cooldown window
+        last = _last_mint.get(user_id, 0)
+        if time.monotonic() - last < _TOKEN_MINT_COOLDOWN:
+            raise RuntimeError(f"Token creation rate-limited for user {user_id}")
+
+        # Evict old token if present (best-effort delete from Domo)
+        if cached:
+            try:
+                await domo_client.delete_access_token(cached[1])
+            except Exception:
+                pass  # best-effort; Domo auto-expires in 1 day
+
+        # Guard against non-numeric user_id
+        try:
+            numeric_id = int(user_id)
+        except ValueError:
+            raise RuntimeError(f"Domo user ID is not numeric: {user_id!r}") from None
+
+        result = await domo_client.create_access_token(
+            name=f"mcp-pdp:{user_id}",
+            owner_id=numeric_id,
+            expires=int((time.time() + 86400) * 1000),  # 1 day in epoch ms
+        )
+        if not result or "token" not in result:
+            raise RuntimeError(f"Failed to create per-user Domo token for user {user_id}")
+
+        token_value = result["token"]
+        token_id = int(result["id"])
+        _token_cache[user_id] = (token_value, token_id, time.monotonic() + _TOKEN_CACHE_TTL)
+        _last_mint[user_id] = time.monotonic()
+
+        if len(_token_cache) > _MAX_CACHE_SIZE:
+            oldest_key = min(_token_cache, key=lambda k: _token_cache[k][2])
+            evicted = _token_cache.pop(oldest_key)
+            _last_mint.pop(oldest_key, None)
+            try:
+                await domo_client.delete_access_token(evicted[1])
+            except Exception:
+                pass
+
+        logger.info(f"_get_user_token: created token for user {user_id}")
+        return token_value
+
+    async def _invalidate_user_token(user_id: str) -> None:
+        """Evict and delete token for a user (on auth failure retry)."""
+        cached = _token_cache.pop(user_id, None)
+        _last_mint.pop(user_id, None)
+        if cached:
+            try:
+                await domo_client.delete_access_token(cached[1])
+            except Exception:
+                pass
 
     async def _resolve_user() -> tuple[str | None, str | None, bool]:
         """Resolve JWT email to Domo user ID and admin status.
@@ -67,6 +149,28 @@ def create_server(auth=None) -> FastMCP:
             logger.info(f"_resolve_user: {email} has admin role — PDP check bypassed")
         return user_id, email, is_admin
 
+    async def _call_with_pdp_retry(
+        user_id: str,
+        override_token: str,
+        call: Callable[..., Awaitable],
+        error_context: str,
+    ) -> Any:
+        """Execute a Domo data call with per-user token and one retry on 401."""
+        try:
+            return await call(override_token=override_token)
+        except DomoRequestError as e:
+            if e.status_code == 401:
+                await _invalidate_user_token(user_id)
+                try:
+                    fresh_token = await _get_user_token(user_id)
+                    return await call(override_token=fresh_token)
+                except (DomoRequestError, RuntimeError):
+                    return _access_denied("Authentication failed after token refresh")
+            elif e.status_code == 403:
+                return _access_denied(f"You don't have permission to {error_context}")
+            else:
+                return _access_denied(f"Domo API error ({e.status_code}) {error_context}")
+
     @mcp.tool()
     async def get_dataset_schema(dataset_id: str) -> str:
         """Get the schema of a Domo dataset.
@@ -82,17 +186,30 @@ def create_server(auth=None) -> FastMCP:
         except ValidationError as e:
             return _validation_error_response(e)
 
-        # PDP check
         user_id, email, is_admin = await _resolve_user()
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
-        if user_id and not is_admin:
-            details = await domo_client.get_dataset_details(validated.dataset_id)
-            if details and not await check_dataset_access(user_id, details, domo_client):
-                return _access_denied()
+
+        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        override_token = None
+        if user_id and not is_admin and is_jwt_auth():
+            try:
+                override_token = await _get_user_token(user_id)
+            except RuntimeError as e:
+                return _access_denied(str(e))
 
         logger.info(f"Getting schema for dataset: {validated.dataset_id}")
-        result = await domo_client.get_dataset_schema(dataset_id=validated.dataset_id)
+        if override_token:
+            result = await _call_with_pdp_retry(
+                user_id, override_token,
+                lambda override_token: domo_client.get_dataset_schema(
+                    dataset_id=validated.dataset_id, override_token=override_token,
+                ),
+                "view this dataset's schema",
+            )
+        else:
+            result = await domo_client.get_dataset_schema(dataset_id=validated.dataset_id)
+
         logger.info("Schema fetched successfully.")
         return json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
 
@@ -111,17 +228,30 @@ def create_server(auth=None) -> FastMCP:
         except ValidationError as e:
             return _validation_error_response(e)
 
-        # PDP check
         user_id, email, is_admin = await _resolve_user()
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
-        if user_id and not is_admin:
-            details = await domo_client.get_dataset_details(validated.dataset_id)
-            if details and not await check_dataset_access(user_id, details, domo_client):
-                return _access_denied()
+
+        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        override_token = None
+        if user_id and not is_admin and is_jwt_auth():
+            try:
+                override_token = await _get_user_token(user_id)
+            except RuntimeError as e:
+                return _access_denied(str(e))
 
         logger.info(f"Getting metadata for dataset: {validated.dataset_id}")
-        result = await domo_client.get_dataset_metadata(dataset_id=validated.dataset_id)
+        if override_token:
+            result = await _call_with_pdp_retry(
+                user_id, override_token,
+                lambda override_token: domo_client.get_dataset_metadata(
+                    dataset_id=validated.dataset_id, override_token=override_token,
+                ),
+                "access this dataset's metadata",
+            )
+        else:
+            result = await domo_client.get_dataset_metadata(dataset_id=validated.dataset_id)
+
         logger.info("Metadata fetched successfully.")
         return json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
 
@@ -142,25 +272,42 @@ def create_server(auth=None) -> FastMCP:
         except ValidationError as e:
             return _validation_error_response(e)
 
-        # PDP check
         user_id, email, is_admin = await _resolve_user()
         if email and not user_id:
             return _access_denied(f"No Domo account linked to '{email}'")
-        if user_id and not is_admin:
-            details = await domo_client.get_dataset_details(validated_id.dataset_id)
-            if details and not await check_dataset_access(user_id, details, domo_client):
-                return _access_denied()
+
+        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        override_token = None
+        if user_id and not is_admin and is_jwt_auth():
+            try:
+                override_token = await _get_user_token(user_id)
+            except RuntimeError as e:
+                return _access_denied(str(e))
 
         logger.info(f"Querying dataset {validated_id.dataset_id} with SQL: {validated_sql.sql}")
-        result = await domo_client.query_dataset(
-            dataset_id=validated_id.dataset_id, sql=validated_sql.sql
-        )
+        if override_token:
+            result = await _call_with_pdp_retry(
+                user_id, override_token,
+                lambda override_token: domo_client.query_dataset(
+                    dataset_id=validated_id.dataset_id, sql=validated_sql.sql,
+                    override_token=override_token,
+                ),
+                "query this dataset",
+            )
+        else:
+            result = await domo_client.query_dataset(
+                dataset_id=validated_id.dataset_id, sql=validated_sql.sql
+            )
+
         logger.info("Query executed successfully.")
         return json.dumps(result, indent=2) if isinstance(result, dict) else str(result)
 
     @mcp.tool()
     async def search_datasets(query: str) -> str:
         """Search for datasets in a Domo instance by name.
+
+        Note: Domo's search API does not PDP-filter results. JWT users see all
+        datasets in search but get 403 or filtered rows when actually querying.
 
         Args:
             query: The search query to find datasets by name.
@@ -173,19 +320,32 @@ def create_server(auth=None) -> FastMCP:
         except ValidationError as e:
             return _validation_error_response(e)
 
+        user_id, email, is_admin = await _resolve_user()
+        if email and not user_id:
+            return _access_denied(f"No Domo account linked to '{email}'")
+
+        # Native PDP: JWT non-admin → per-user token; everything else → service account
+        override_token = None
+        if user_id and not is_admin and is_jwt_auth():
+            try:
+                override_token = await _get_user_token(user_id)
+            except RuntimeError as e:
+                return _access_denied(str(e))
+
         try:
             logger.info(f"Searching datasets with query: {validated.query}")
-            result = await domo_client.search_datasets(query=validated.query)
+            if override_token:
+                result = await _call_with_pdp_retry(
+                    user_id, override_token,
+                    lambda override_token: domo_client.search_datasets(
+                        query=validated.query, override_token=override_token,
+                    ),
+                    "search datasets",
+                )
+            else:
+                result = await domo_client.search_datasets(query=validated.query)
+
             logger.info(f"Datasets searched successfully. result type={type(result).__name__}")
-
-            # PDP filter: only return datasets user can access
-            user_id, email, is_admin = await _resolve_user()
-            logger.info(f"search_datasets: user_id={user_id}, email={email}, is_admin={is_admin}")
-            if email and not user_id:
-                return _access_denied(f"No Domo account linked to '{email}'")
-            if user_id and not is_admin and isinstance(result, list):
-                result = await filter_accessible_datasets(user_id, result, domo_client)
-
             return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
         except Exception:
             logger.error(f"search_datasets error:\n{traceback.format_exc()}")
@@ -204,7 +364,7 @@ def create_server(auth=None) -> FastMCP:
         return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
 
     @mcp.tool()
-    async def create_role(name: str, from_role_id: int, description: Optional[str] = None) -> str:
+    async def create_role(name: str, from_role_id: int, description: str | None = None) -> str:
         """Create a new role in the Domo instance.
 
         Args:
@@ -295,5 +455,9 @@ def create_server(auth=None) -> FastMCP:
         result = _execute_code(code, parsed_data)
         logger.info(f"run_python: output length={len(result)}")
         return result
+
+    # Token management (list/create/delete access tokens) is NOT exposed as MCP tools.
+    # DomoClient methods are used internally by _get_user_token / _invalidate_user_token
+    # for per-user PDP token lifecycle. No external caller should mint or revoke tokens directly.
 
     return mcp

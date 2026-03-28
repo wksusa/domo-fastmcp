@@ -35,6 +35,20 @@ CONNECT_TIMEOUT = 10.0  # seconds
 MAX_RESPONSE_SIZE = 10 * 1024 * 1024  # 10MB
 SLOW_REQUEST_THRESHOLD = 5.0  # seconds
 
+class DomoRequestError(Exception):
+    """Raised when a Domo API request fails with override_token active.
+
+    Callers branch on status_code:
+    - 401 → retry with fresh token
+    - 403 → surface as "access denied"
+    - other → surface as generic error
+    """
+
+    def __init__(self, status_code: int, url: str) -> None:
+        self.status_code = status_code
+        super().__init__(f"Domo API {status_code}: {url}")
+
+
 class DomoClient:
     def __init__(self, logger: logging.Logger):
         """Initialize the DomoClient with environment variables and constants."""
@@ -45,6 +59,11 @@ class DomoClient:
             timeout=DEFAULT_TIMEOUT,
             connect=CONNECT_TIMEOUT
         )
+
+        # Persistent HTTP client — reused across all requests to avoid
+        # per-call TCP+TLS handshake overhead (~50-120ms savings per call).
+        # Must be closed via close() during FastMCP lifespan teardown.
+        self._http_client = httpx.AsyncClient(timeout=self.timeout)
 
         # Developer Token auth (preferred - gives access to internal APIs)
         self.developer_token = os.getenv("DOMO_DEVELOPER_TOKEN")
@@ -70,18 +89,22 @@ class DomoClient:
                 "  - DOMO_CLIENT_ID + DOMO_CLIENT_SECRET (for public API only)"
             )
 
-        self._oauth_token = None
-        self._token_expires_at = 0
+        self._oauth_token: str | None = None
+        self._token_expires_at: float = 0
 
         # For Developer Token mode, also check for OAuth credentials
         # needed for public API calls (/v1/users, /v1/datasets, etc.)
         # that only work via api.domo.com with OAuth
         self._public_api_client_id = self.client_id or os.getenv("DOMO_CLIENT_ID")
         self._public_api_client_secret = self.client_secret or os.getenv("DOMO_CLIENT_SECRET")
-        self._public_api_token = None
-        self._public_api_token_expires_at = 0
+        self._public_api_token: str | None = None
+        self._public_api_token_expires_at: float = 0
         if self.auth_mode == "developer_token" and self._public_api_client_id:
             self.logger.info("OAuth credentials available for public API calls (/v1/...)")
+
+    async def close(self):
+        """Close the persistent HTTP client. Call from FastMCP lifespan teardown."""
+        await self._http_client.aclose()
 
     async def _get_headers(self) -> dict:
         """Get request headers based on auth mode."""
@@ -94,17 +117,16 @@ class DomoClient:
         else:
             # OAuth mode - get/refresh token
             if not self._oauth_token or time.time() >= (self._token_expires_at - 60):
-                async with httpx.AsyncClient(timeout=self.timeout) as client:
-                    response = await client.post(
-                        "https://api.domo.com/oauth/token",
-                        params={"grant_type": "client_credentials", "scope": "data"},
-                        auth=(self.client_id, self.client_secret)
-                    )
-                    response.raise_for_status()
-                    token_data = response.json()
-                    self._oauth_token = token_data["access_token"]
-                    self._token_expires_at = time.time() + token_data.get("expires_in", 3600)
-                    self.logger.info("OAuth token refreshed successfully")
+                response = await self._http_client.post(
+                    "https://api.domo.com/oauth/token",
+                    params={"grant_type": "client_credentials", "scope": "data"},
+                    auth=(self.client_id, self.client_secret)
+                )
+                response.raise_for_status()
+                token_data = response.json()
+                self._oauth_token = token_data["access_token"]
+                self._token_expires_at = time.time() + token_data.get("expires_in", 3600)
+                self.logger.info("OAuth token refreshed successfully")
 
             return {
                 "Authorization": f"Bearer {self._oauth_token}",
@@ -121,17 +143,16 @@ class DomoClient:
             return None
 
         if not self._public_api_token or time.time() >= (self._public_api_token_expires_at - 60):
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                response = await client.post(
-                    "https://api.domo.com/oauth/token",
-                    params={"grant_type": "client_credentials", "scope": "data user"},
-                    auth=(self._public_api_client_id, self._public_api_client_secret)
-                )
-                response.raise_for_status()
-                token_data = response.json()
-                self._public_api_token = token_data["access_token"]
-                self._public_api_token_expires_at = time.time() + token_data.get("expires_in", 3600)
-                self.logger.info("Public API OAuth token refreshed")
+            response = await self._http_client.post(
+                "https://api.domo.com/oauth/token",
+                params={"grant_type": "client_credentials", "scope": "data user"},
+                auth=(self._public_api_client_id, self._public_api_client_secret)
+            )
+            response.raise_for_status()
+            token_data = response.json()
+            self._public_api_token = token_data["access_token"]
+            self._public_api_token_expires_at = time.time() + token_data.get("expires_in", 3600)
+            self.logger.info("Public API OAuth token refreshed")
 
         return {
             "Authorization": f"Bearer {self._public_api_token}",
@@ -163,46 +184,45 @@ class DomoClient:
         start_time = time.time()
 
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                if method.upper() == "GET":
-                    response = await client.get(full_url, headers=headers)
-                elif method.upper() == "POST":
-                    response = await client.post(full_url, headers=headers, json=data)
-                elif method.upper() == "DELETE":
-                    response = await client.delete(full_url, headers=headers)
-                else:
-                    raise ValueError(f"Unsupported HTTP method: {method}")
+            if method.upper() == "GET":
+                response = await self._http_client.get(full_url, headers=headers)
+            elif method.upper() == "POST":
+                response = await self._http_client.post(full_url, headers=headers, json=data)
+            elif method.upper() == "DELETE":
+                response = await self._http_client.delete(full_url, headers=headers)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
 
-                # Calculate request duration
-                duration = time.time() - start_time
+            # Calculate request duration
+            duration = time.time() - start_time
 
-                # Log slow requests
-                if duration > SLOW_REQUEST_THRESHOLD:
-                    self.logger.warning(
-                        f"Slow request detected: {method} {url} took {duration:.2f}s"
-                    )
-                else:
-                    self.logger.info(f"{method} {url} completed in {duration:.2f}s")
+            # Log slow requests
+            if duration > SLOW_REQUEST_THRESHOLD:
+                self.logger.warning(
+                    f"Slow request detected: {method} {url} took {duration:.2f}s"
+                )
+            else:
+                self.logger.info(f"{method} {url} completed in {duration:.2f}s")
 
-                response.raise_for_status()
+            response.raise_for_status()
 
-                # Handle empty responses
-                if not response.content:
-                    return None
+            # Handle empty responses
+            if not response.content:
+                return None
 
-                # Check response size
-                response_size = len(response.content)
-                if response_size > MAX_RESPONSE_SIZE:
-                    self.logger.error(
-                        f"Response too large: {response_size} bytes exceeds limit of {MAX_RESPONSE_SIZE} bytes"
-                    )
-                    return None
-                elif response_size > MAX_RESPONSE_SIZE / 2:
-                    self.logger.warning(
-                        f"Large response: {response_size} bytes ({response_size / (1024*1024):.2f}MB)"
-                    )
+            # Check response size
+            response_size = len(response.content)
+            if response_size > MAX_RESPONSE_SIZE:
+                self.logger.error(
+                    f"Response too large: {response_size} bytes exceeds limit of {MAX_RESPONSE_SIZE} bytes"
+                )
+                return None
+            elif response_size > MAX_RESPONSE_SIZE / 2:
+                self.logger.warning(
+                    f"Large response: {response_size} bytes ({response_size / (1024*1024):.2f}MB)"
+                )
 
-                return response.json()
+            return response.json()
         except httpx.TimeoutException as e:
             duration = time.time() - start_time
             self.logger.error(
@@ -228,10 +248,52 @@ class DomoClient:
             )
             return None
 
-    async def get_dataset_metadata(self, dataset_id: str) -> str:
-        """Get metadata for a Domo dataset."""
+    async def _request_with_override(
+        self, method: str, url: str, override_token: str, *, data: dict | None = None
+    ) -> dict | None:
+        """Execute a request using a per-user override token.
+
+        Constructs headers with the override token and raises DomoRequestError
+        on HTTP errors (instead of returning None like make_request).
+        Only logs status_code + URL path — never the token or response body.
+        """
+        full_url = f"{self.DOMO_API_BASE}{url}"
+        headers = {
+            "X-DOMO-Developer-Token": override_token,
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        start_time = time.time()
         try:
-            url = f"/data/v3/datasources/{dataset_id}?part=core"
+            if method.upper() == "GET":
+                response = await self._http_client.get(full_url, headers=headers)
+            elif method.upper() == "POST":
+                response = await self._http_client.post(full_url, headers=headers, json=data)
+            else:
+                raise ValueError(f"Unsupported HTTP method: {method}")
+
+            duration = time.time() - start_time
+            self.logger.info(f"{method} {url} completed in {duration:.2f}s (override)")
+
+            response.raise_for_status()
+
+            if not response.content:
+                return None
+            return response.json()
+        except httpx.HTTPStatusError as e:
+            self.logger.warning(f"Per-user token request failed: {e.response.status_code} {url}")
+            raise DomoRequestError(e.response.status_code, url) from e
+        except (httpx.TimeoutException, httpx.RequestError) as e:
+            self.logger.warning(f"Per-user token request failed (network): {url}")
+            raise DomoRequestError(0, url) from e
+
+    async def get_dataset_metadata(self, dataset_id: str, *, override_token: str | None = None) -> dict | str:
+        """Get metadata for a Domo dataset."""
+        url = f"/data/v3/datasources/{dataset_id}?part=core"
+        if override_token:
+            data = await self._request_with_override("GET", url, override_token)
+            return data if data else "Unable to fetch dataset metadata."
+        try:
             data = await self.make_request(url, "GET")
 
             if not data:
@@ -243,10 +305,13 @@ class DomoClient:
             self.logger.error(f"Error fetching dataset metadata: {str(e)}")
             return f"Error fetching dataset metadata: {str(e)}"
 
-    async def get_dataset_schema(self, dataset_id: str) -> str:
+    async def get_dataset_schema(self, dataset_id: str, *, override_token: str | None = None) -> dict | str:
         """Get the schema of a Domo dataset."""
+        url = f"/data/v2/datasources/{dataset_id}/schemas/latest"
+        if override_token:
+            data = await self._request_with_override("GET", url, override_token)
+            return data if data else "Unable to fetch dataset schema."
         try:
-            url = f"/data/v2/datasources/{dataset_id}/schemas/latest"
             data = await self.make_request(url, "GET")
 
             if not data:
@@ -258,10 +323,13 @@ class DomoClient:
             self.logger.error(f"Error fetching dataset schema: {str(e)}")
             return f"Error fetching dataset schema: {str(e)}"
 
-    async def query_dataset(self, dataset_id: str, sql: str) -> str:
+    async def query_dataset(self, dataset_id: str, sql: str, *, override_token: str | None = None) -> dict | str:
         """Query a Domo dataset using SQL."""
+        url = f"/query/v1/execute/{dataset_id}"
+        if override_token:
+            data = await self._request_with_override("POST", url, override_token, data={"sql": sql})
+            return data if data else "Unable to execute query on the dataset."
         try:
-            url = f"/query/v1/execute/{dataset_id}"
             data = await self.make_request(url, "POST", data={"sql": sql})
 
             if not data:
@@ -273,8 +341,13 @@ class DomoClient:
             self.logger.error(f"Error executing query on dataset: {str(e)}")
             return f"Error executing query on dataset: {str(e)}"
 
-    async def search_datasets(self, query: str) -> str:
-        """Search for datasets in a Domo instance by name."""
+    async def search_datasets(self, query: str, *, override_token: str | None = None) -> list | str:
+        """Search for datasets in a Domo instance by name.
+
+        Note: Domo's internal search API does not PDP-filter results even with
+        per-user tokens. JWT users will see all datasets in search but get 403
+        or filtered rows when actually querying. This is by design — no data leakage.
+        """
         try:
             if self.auth_mode == "developer_token":
                 # Developer Token mode: use internal UI search API (efficient, server-side)
@@ -287,7 +360,11 @@ class DomoClient:
                     "offset": 0,
                     "sort": {"isRelevance": False, "fieldSorts": [{"field": "create_date", "sortOrder": "DESC"}]},
                 }
-                data = await self.make_request("/data/ui/v3/datasources/search", "POST", data=payload)
+                url = "/data/ui/v3/datasources/search"
+                if override_token:
+                    data = await self._request_with_override("POST", url, override_token, data=payload)
+                else:
+                    data = await self.make_request(url, "POST", data=payload)
                 if not data:
                     return []
                 if not isinstance(data, dict):
@@ -394,36 +471,35 @@ class DomoClient:
             self.logger.error(f"Error listing users: {str(e)}")
             return []
 
-    async def get_dataset_details(self, dataset_id: str) -> dict | None:
-        """Get dataset details including PDP policies.
+    async def create_access_token(self, name: str, owner_id: int, expires: int) -> dict | None:
+        """Create an access token for a Domo user.
 
         Args:
-            dataset_id: The dataset ID.
+            name: Display name for the token.
+            owner_id: Domo user ID who will own the token.
+            expires: Expiration timestamp in epoch milliseconds.
 
         Returns:
-            Dict with pdpEnabled, policies, etc. or None on error.
+            Dict with token details (including the token value), or None on error.
         """
-        try:
-            url = f"/v1/datasets/{dataset_id}"
-            data = await self.make_request(url, "GET")
-            return data if isinstance(data, dict) else None
-        except Exception as e:
-            self.logger.error(f"Error fetching dataset details: {str(e)}")
-            return None
+        url = "/data/v1/accesstokens"
+        payload = {"name": name, "ownerId": owner_id, "expires": expires}
+        data = await self.make_request(url, "POST", data=payload)
+        return data if isinstance(data, dict) else None
 
-    async def list_group_users(self, group_id: str) -> list[dict]:
-        """List users in a Domo group.
+    async def delete_access_token(self, token_id: int) -> bool:
+        """Delete (revoke) an access token.
 
         Args:
-            group_id: The group ID.
+            token_id: The ID of the access token to delete.
 
         Returns:
-            List of user dicts.
+            True if deleted successfully, False on error.
         """
         try:
-            url = f"/v1/groups/{group_id}/users"
-            data = await self.make_request(url, "GET")
-            return data if isinstance(data, list) else []
+            url = f"/data/v1/accesstokens/{token_id}"
+            await self.make_request(url, "DELETE")
+            return True
         except Exception as e:
-            self.logger.error(f"Error listing group users: {str(e)}")
-            return []
+            self.logger.error(f"Error deleting access token: {str(e)}")
+            return False

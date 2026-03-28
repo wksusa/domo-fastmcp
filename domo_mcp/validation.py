@@ -1,7 +1,7 @@
 """Pydantic models for input validation."""
 
 import re
-from typing import Annotated, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field, field_validator
 
