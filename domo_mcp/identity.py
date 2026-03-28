@@ -18,6 +18,8 @@ def is_jwt_auth() -> bool:
     if not token or not token.claims:
         return False
     client_id = token.claims.get("client_id", "")
+    if not client_id:
+        return False
     return not client_id.startswith("bearer:")
 
 

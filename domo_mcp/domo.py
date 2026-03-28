@@ -283,8 +283,11 @@ class DomoClient:
         except httpx.HTTPStatusError as e:
             self.logger.warning(f"Per-user token request failed: {e.response.status_code} {url}")
             raise DomoRequestError(e.response.status_code, url) from e
+        except (httpx.TimeoutException, httpx.RequestError) as e:
+            self.logger.warning(f"Per-user token request failed (network): {url}")
+            raise DomoRequestError(0, url) from e
 
-    async def get_dataset_metadata(self, dataset_id: str, *, override_token: str | None = None) -> str:
+    async def get_dataset_metadata(self, dataset_id: str, *, override_token: str | None = None) -> dict | str:
         """Get metadata for a Domo dataset."""
         url = f"/data/v3/datasources/{dataset_id}?part=core"
         if override_token:
@@ -302,7 +305,7 @@ class DomoClient:
             self.logger.error(f"Error fetching dataset metadata: {str(e)}")
             return f"Error fetching dataset metadata: {str(e)}"
 
-    async def get_dataset_schema(self, dataset_id: str, *, override_token: str | None = None) -> str:
+    async def get_dataset_schema(self, dataset_id: str, *, override_token: str | None = None) -> dict | str:
         """Get the schema of a Domo dataset."""
         url = f"/data/v2/datasources/{dataset_id}/schemas/latest"
         if override_token:
@@ -320,7 +323,7 @@ class DomoClient:
             self.logger.error(f"Error fetching dataset schema: {str(e)}")
             return f"Error fetching dataset schema: {str(e)}"
 
-    async def query_dataset(self, dataset_id: str, sql: str, *, override_token: str | None = None) -> str:
+    async def query_dataset(self, dataset_id: str, sql: str, *, override_token: str | None = None) -> dict | str:
         """Query a Domo dataset using SQL."""
         url = f"/query/v1/execute/{dataset_id}"
         if override_token:
@@ -338,7 +341,7 @@ class DomoClient:
             self.logger.error(f"Error executing query on dataset: {str(e)}")
             return f"Error executing query on dataset: {str(e)}"
 
-    async def search_datasets(self, query: str, *, override_token: str | None = None) -> str:
+    async def search_datasets(self, query: str, *, override_token: str | None = None) -> list | str:
         """Search for datasets in a Domo instance by name.
 
         Note: Domo's internal search API does not PDP-filter results even with
@@ -468,40 +471,6 @@ class DomoClient:
             self.logger.error(f"Error listing users: {str(e)}")
             return []
 
-    async def get_dataset_details(self, dataset_id: str) -> dict | None:
-        """Get dataset details including PDP policies.
-
-        Args:
-            dataset_id: The dataset ID.
-
-        Returns:
-            Dict with pdpEnabled, policies, etc. or None on error.
-        """
-        try:
-            url = f"/v1/datasets/{dataset_id}"
-            data = await self.make_request(url, "GET")
-            return data if isinstance(data, dict) else None
-        except Exception as e:
-            self.logger.error(f"Error fetching dataset details: {str(e)}")
-            return None
-
-    async def list_group_users(self, group_id: str) -> list[dict]:
-        """List users in a Domo group.
-
-        Args:
-            group_id: The group ID.
-
-        Returns:
-            List of user dicts.
-        """
-        try:
-            url = f"/v1/groups/{group_id}/users"
-            data = await self.make_request(url, "GET")
-            return data if isinstance(data, list) else []
-        except Exception as e:
-            self.logger.error(f"Error listing group users: {str(e)}")
-            return []
-
     async def list_access_tokens(self) -> list[dict]:
         """List all access tokens in the Domo instance."""
         try:
@@ -521,10 +490,7 @@ class DomoClient:
             expires: Expiration timestamp in epoch milliseconds.
 
         Returns:
-            Dict with token details (including the token value).
-
-        Raises:
-            Exception: Re-raised from make_request — callers need the root cause.
+            Dict with token details (including the token value), or None on error.
         """
         url = "/data/v1/accesstokens"
         payload = {"name": name, "ownerId": owner_id, "expires": expires}

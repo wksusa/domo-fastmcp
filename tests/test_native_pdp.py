@@ -1,10 +1,9 @@
 """Tests for native PDP enforcement via per-user tokens.
 
 Covers: is_jwt_auth(), DomoRequestError, override_token on data methods,
-token cache, and admin tool gating.
+and admin tool gating.
 """
 
-import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -69,12 +68,12 @@ class TestIsJwtAuth:
         with patch("domo_mcp.identity.get_access_token", return_value=token):
             assert is_jwt_auth() is True
 
-    def test_empty_client_id_returns_true(self):
-        """JWT tokens without client_id are still JWT (not bearer)."""
+    def test_empty_client_id_returns_false(self):
+        """Missing client_id defaults to non-JWT (safe default)."""
         token = MagicMock()
         token.claims = {"sub": "user123"}
         with patch("domo_mcp.identity.get_access_token", return_value=token):
-            assert is_jwt_auth() is True
+            assert is_jwt_auth() is False
 
     def test_empty_claims_dict_returns_false(self):
         """Empty claims dict is falsy — treated as unauthenticated."""
@@ -176,25 +175,3 @@ class TestOverrideToken:
         assert result == {"name": "test"}
 
 
-# ---------------------------------------------------------------------------
-# Token cache (unit tests for _get_user_token / _invalidate_user_token)
-# ---------------------------------------------------------------------------
-
-class TestTokenCache:
-    """Test the token cache closures created inside create_server()."""
-
-    @pytest.fixture
-    def server_internals(self):
-        """Create a server and extract the closure variables for testing.
-
-        We test the cache logic by calling the tools and checking behavior.
-        """
-        # This is tested indirectly through the tool integration tests
-        pass
-
-    def test_token_cache_ttl_constants(self):
-        """Verify cache constants are reasonable."""
-        # These are defined in server_factory.py create_server()
-        # Just verify the module imports successfully
-        from domo_mcp.server_factory import create_server
-        assert callable(create_server)

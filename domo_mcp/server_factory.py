@@ -3,7 +3,9 @@
 import json
 import time
 import traceback
-from typing import Optional
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
+from typing import Any
 
 from fastmcp import FastMCP
 from pydantic import ValidationError
@@ -42,16 +44,22 @@ def create_server(auth=None) -> FastMCP:
     Args:
         auth: Optional auth verifier (e.g. JWTVerifier) to pass to FastMCP.
     """
+    domo_client = DomoClient(logger)
+    user_resolver = UserResolver(domo_client)
+
+    @asynccontextmanager
+    async def lifespan(server):
+        yield
+        await domo_client.close()
+
     mcp = FastMCP(
         name="domo-mcp",
         instructions="""You are connected to a Domo instance. You can query datasets,
         search for datasets, get schema information, and manage roles. Always use the
         appropriate tool based on what the user is asking for.""",
         auth=auth,
+        lifespan=lifespan,
     )
-
-    domo_client = DomoClient(logger)
-    user_resolver = UserResolver(domo_client)
 
     # -- Per-user Domo access token cache for native PDP enforcement --
     # Defined inside create_server() for test isolation — each call gets
@@ -63,6 +71,7 @@ def create_server(auth=None) -> FastMCP:
     _TOKEN_CACHE_TTL = 14400  # 4 hours
     _TOKEN_MINT_COOLDOWN = 10  # seconds — rate limit per user
     _TOKEN_PRE_EXPIRY_BUFFER = 60  # seconds — treat as expired this far before actual expiry
+    _MAX_CACHE_SIZE = 500
 
     async def _get_user_token(user_id: str) -> str:
         """Get or create a Domo access token for the given user.
@@ -103,12 +112,23 @@ def create_server(auth=None) -> FastMCP:
         token_id = int(result["id"])
         _token_cache[user_id] = (token_value, token_id, time.monotonic() + _TOKEN_CACHE_TTL)
         _last_mint[user_id] = time.monotonic()
+
+        if len(_token_cache) > _MAX_CACHE_SIZE:
+            oldest_key = min(_token_cache, key=lambda k: _token_cache[k][2])
+            evicted = _token_cache.pop(oldest_key)
+            _last_mint.pop(oldest_key, None)
+            try:
+                await domo_client.delete_access_token(evicted[1])
+            except Exception:
+                pass
+
         logger.info(f"_get_user_token: created token for user {user_id}")
         return token_value
 
     async def _invalidate_user_token(user_id: str) -> None:
         """Evict and delete token for a user (on auth failure retry)."""
         cached = _token_cache.pop(user_id, None)
+        _last_mint.pop(user_id, None)
         if cached:
             try:
                 await domo_client.delete_access_token(cached[1])
@@ -130,6 +150,28 @@ def create_server(auth=None) -> FastMCP:
         if is_admin:
             logger.info(f"_resolve_user: {email} has admin role — PDP check bypassed")
         return user_id, email, is_admin
+
+    async def _call_with_pdp_retry(
+        user_id: str,
+        override_token: str,
+        call: Callable[..., Awaitable],
+        error_context: str,
+    ) -> Any:
+        """Execute a Domo data call with per-user token and one retry on 401."""
+        try:
+            return await call(override_token=override_token)
+        except DomoRequestError as e:
+            if e.status_code == 401:
+                await _invalidate_user_token(user_id)
+                try:
+                    fresh_token = await _get_user_token(user_id)
+                    return await call(override_token=fresh_token)
+                except (DomoRequestError, RuntimeError):
+                    return _access_denied("Authentication failed after token refresh")
+            elif e.status_code == 403:
+                return _access_denied(f"You don't have permission to {error_context}")
+            else:
+                return _access_denied(f"Domo API error ({e.status_code}) {error_context}")
 
     @mcp.tool()
     async def get_dataset_schema(dataset_id: str) -> str:
@@ -160,24 +202,13 @@ def create_server(auth=None) -> FastMCP:
 
         logger.info(f"Getting schema for dataset: {validated.dataset_id}")
         if override_token:
-            try:
-                result = await domo_client.get_dataset_schema(
-                    dataset_id=validated.dataset_id, override_token=override_token
-                )
-            except DomoRequestError as e:
-                if e.status_code == 401:
-                    await _invalidate_user_token(user_id)
-                    try:
-                        override_token = await _get_user_token(user_id)
-                        result = await domo_client.get_dataset_schema(
-                            dataset_id=validated.dataset_id, override_token=override_token
-                        )
-                    except (DomoRequestError, RuntimeError):
-                        return _access_denied("Authentication failed after token refresh")
-                elif e.status_code == 403:
-                    return _access_denied("You don't have permission to view this dataset's schema")
-                else:
-                    return _access_denied(f"Domo API error ({e.status_code}) fetching schema")
+            result = await _call_with_pdp_retry(
+                user_id, override_token,
+                lambda override_token: domo_client.get_dataset_schema(
+                    dataset_id=validated.dataset_id, override_token=override_token,
+                ),
+                "view this dataset's schema",
+            )
         else:
             result = await domo_client.get_dataset_schema(dataset_id=validated.dataset_id)
 
@@ -213,24 +244,13 @@ def create_server(auth=None) -> FastMCP:
 
         logger.info(f"Getting metadata for dataset: {validated.dataset_id}")
         if override_token:
-            try:
-                result = await domo_client.get_dataset_metadata(
-                    dataset_id=validated.dataset_id, override_token=override_token
-                )
-            except DomoRequestError as e:
-                if e.status_code == 401:
-                    await _invalidate_user_token(user_id)
-                    try:
-                        override_token = await _get_user_token(user_id)
-                        result = await domo_client.get_dataset_metadata(
-                            dataset_id=validated.dataset_id, override_token=override_token
-                        )
-                    except (DomoRequestError, RuntimeError):
-                        return _access_denied("Authentication failed after token refresh")
-                elif e.status_code == 403:
-                    return _access_denied("You don't have permission to access this dataset's metadata")
-                else:
-                    return _access_denied(f"Domo API error ({e.status_code}) fetching metadata")
+            result = await _call_with_pdp_retry(
+                user_id, override_token,
+                lambda override_token: domo_client.get_dataset_metadata(
+                    dataset_id=validated.dataset_id, override_token=override_token,
+                ),
+                "access this dataset's metadata",
+            )
         else:
             result = await domo_client.get_dataset_metadata(dataset_id=validated.dataset_id)
 
@@ -268,26 +288,14 @@ def create_server(auth=None) -> FastMCP:
 
         logger.info(f"Querying dataset {validated_id.dataset_id} with SQL: {validated_sql.sql}")
         if override_token:
-            try:
-                result = await domo_client.query_dataset(
+            result = await _call_with_pdp_retry(
+                user_id, override_token,
+                lambda override_token: domo_client.query_dataset(
                     dataset_id=validated_id.dataset_id, sql=validated_sql.sql,
                     override_token=override_token,
-                )
-            except DomoRequestError as e:
-                if e.status_code == 401:
-                    await _invalidate_user_token(user_id)
-                    try:
-                        override_token = await _get_user_token(user_id)
-                        result = await domo_client.query_dataset(
-                            dataset_id=validated_id.dataset_id, sql=validated_sql.sql,
-                            override_token=override_token,
-                        )
-                    except (DomoRequestError, RuntimeError):
-                        return _access_denied("Authentication failed after token refresh")
-                elif e.status_code == 403:
-                    return _access_denied("You don't have permission to query this dataset")
-                else:
-                    return _access_denied(f"Domo API error ({e.status_code}) querying dataset")
+                ),
+                "query this dataset",
+            )
         else:
             result = await domo_client.query_dataset(
                 dataset_id=validated_id.dataset_id, sql=validated_sql.sql
@@ -329,24 +337,13 @@ def create_server(auth=None) -> FastMCP:
         try:
             logger.info(f"Searching datasets with query: {validated.query}")
             if override_token:
-                try:
-                    result = await domo_client.search_datasets(
-                        query=validated.query, override_token=override_token
-                    )
-                except DomoRequestError as e:
-                    if e.status_code == 401:
-                        await _invalidate_user_token(user_id)
-                        try:
-                            override_token = await _get_user_token(user_id)
-                            result = await domo_client.search_datasets(
-                                query=validated.query, override_token=override_token
-                            )
-                        except (DomoRequestError, RuntimeError):
-                            return _access_denied("Authentication failed after token refresh")
-                    elif e.status_code == 403:
-                        return _access_denied("You don't have permission to search datasets")
-                    else:
-                        return _access_denied(f"Domo API error ({e.status_code}) searching datasets")
+                result = await _call_with_pdp_retry(
+                    user_id, override_token,
+                    lambda override_token: domo_client.search_datasets(
+                        query=validated.query, override_token=override_token,
+                    ),
+                    "search datasets",
+                )
             else:
                 result = await domo_client.search_datasets(query=validated.query)
 
@@ -369,7 +366,7 @@ def create_server(auth=None) -> FastMCP:
         return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
 
     @mcp.tool()
-    async def create_role(name: str, from_role_id: int, description: Optional[str] = None) -> str:
+    async def create_role(name: str, from_role_id: int, description: str | None = None) -> str:
         """Create a new role in the Domo instance.
 
         Args:
@@ -470,7 +467,9 @@ def create_server(auth=None) -> FastMCP:
         Returns:
             JSON string containing all access tokens with their IDs, names, owners, and expiration dates.
         """
-        _, _, is_admin = await _resolve_user()
+        _, email, is_admin = await _resolve_user()
+        if not email:
+            return _access_denied("Authentication required")
         if not is_admin:
             return _access_denied("Admin role required to list access tokens")
 
@@ -494,7 +493,9 @@ def create_server(auth=None) -> FastMCP:
         Returns:
             JSON string containing the created token details, including the token value.
         """
-        _, _, is_admin = await _resolve_user()
+        _, email, is_admin = await _resolve_user()
+        if not email:
+            return _access_denied("Authentication required")
         if not is_admin:
             return _access_denied("Admin role required to create access tokens")
 
@@ -528,7 +529,9 @@ def create_server(auth=None) -> FastMCP:
         Returns:
             JSON string confirming deletion or an error message.
         """
-        _, _, is_admin = await _resolve_user()
+        _, email, is_admin = await _resolve_user()
+        if not email:
+            return _access_denied("Authentication required")
         if not is_admin:
             return _access_denied("Admin role required to delete access tokens")
 
