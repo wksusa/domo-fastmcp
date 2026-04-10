@@ -1,6 +1,18 @@
 """Vercel serverless endpoint — auth mode selected via AUTH_MODE env var."""
 
+import logging
 import os
+import sys
+import warnings
+
+# Redirect logging to stdout so Vercel doesn't classify structured logs as errors
+logging.basicConfig(
+    stream=sys.stdout,
+    level=logging.INFO,
+    format="%(levelname)-8s %(name)s: %(message)s",
+)
+logging.getLogger("fastmcp").setLevel(logging.WARNING)
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="websockets")
 
 from fastmcp.server.event_store import EventStore
 from starlette.middleware import Middleware

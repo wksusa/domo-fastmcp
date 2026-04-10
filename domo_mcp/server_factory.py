@@ -1,6 +1,7 @@
 """Shared server factory — defines all tools once, used by both stdio and HTTP modes."""
 
 import json
+import logging
 import time
 import traceback
 from collections.abc import Awaitable, Callable
@@ -8,6 +9,8 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastmcp import FastMCP
+from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
+from fastmcp.server.middleware.middleware import CallNext, MiddlewareContext
 from pydantic import ValidationError
 
 from .code_executor import execute as _execute_code
@@ -24,6 +27,36 @@ from .validation import (
 )
 
 logger = Logger()
+_structured_logger = logging.getLogger("domo_mcp")
+
+
+class _ToolNameLoggingMiddleware(StructuredLoggingMiddleware):
+    """Adds tool_name and call_id fields to structured logs."""
+
+    @staticmethod
+    def _get_call_id() -> str:
+        try:
+            from fastmcp.server.dependencies import get_http_headers
+            return get_http_headers(include={"x-call-id"}).get("x-call-id", "")
+        except Exception:
+            return ""
+
+    def _enrich(self, msg: dict, context: MiddlewareContext[Any]) -> dict:
+        if context.method == "tools/call" and hasattr(context.message, "name"):
+            msg["tool_name"] = context.message.name
+        call_id = self._get_call_id()
+        if call_id:
+            msg["call_id"] = call_id
+        return msg
+
+    def _create_before_message(self, context: MiddlewareContext[Any]) -> dict:
+        return self._enrich(super()._create_before_message(context), context)
+
+    def _create_error_message(self, context: MiddlewareContext[Any], start_time: float, error: Exception) -> dict:
+        return self._enrich(super()._create_error_message(context, start_time, error), context)
+
+    def _create_after_message(self, context: MiddlewareContext[Any], start_time: float) -> dict:
+        return self._enrich(super()._create_after_message(context, start_time), context)
 
 
 def _validation_error_response(e: ValidationError) -> str:
@@ -459,5 +492,10 @@ def create_server(auth=None) -> FastMCP:
     # Token management (list/create/delete access tokens) is NOT exposed as MCP tools.
     # DomoClient methods are used internally by _get_user_token / _invalidate_user_token
     # for per-user PDP token lifecycle. No external caller should mint or revoke tokens directly.
+
+    mcp.add_middleware(_ToolNameLoggingMiddleware(
+        include_payloads=True,
+        logger=_structured_logger,
+    ))
 
     return mcp
