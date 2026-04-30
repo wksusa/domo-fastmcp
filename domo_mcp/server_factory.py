@@ -6,11 +6,13 @@ import time
 import traceback
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any
 
 from fastmcp import FastMCP
 from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
 from fastmcp.server.middleware.middleware import CallNext, MiddlewareContext
+from fastmcp.utilities.types import Image
 from mcp.types import Icon
 from pydantic import ValidationError
 
@@ -60,6 +62,29 @@ class _ToolNameLoggingMiddleware(StructuredLoggingMiddleware):
         return self._enrich(super()._create_after_message(context, start_time), context)
 
 
+_ASSETS_DIR = Path(__file__).parent / "assets"
+
+
+def _build_icons() -> list[Icon]:
+    """Embed icons as data URIs so clients don't need to fetch external URLs."""
+    icons: list[Icon] = []
+    png_path = _ASSETS_DIR / "domo_logo.png"
+    if png_path.exists():
+        icons.append(Icon(
+            src=Image(path=str(png_path)).to_data_uri(),
+            mimeType="image/png",
+            sizes=["256x256"],
+        ))
+    svg_path = _ASSETS_DIR / "domo_logo.svg"
+    if svg_path.exists():
+        icons.append(Icon(
+            src=Image(path=str(svg_path)).to_data_uri(),
+            mimeType="image/svg+xml",
+            sizes=["any"],
+        ))
+    return icons
+
+
 def _validation_error_response(e: ValidationError) -> str:
     errors = e.errors()
     messages = [f"{err['loc'][0]}: {err['msg']}" for err in errors]
@@ -92,13 +117,7 @@ def create_server(auth=None) -> FastMCP:
         auth=auth,
         lifespan=lifespan,
         website_url="https://www.domo.com",
-        icons=[
-            Icon(
-                src="https://upload.wikimedia.org/wikipedia/commons/d/d1/Domo_logo.svg",
-                mimeType="image/svg+xml",
-                sizes=["any"],
-            ),
-        ],
+        icons=_build_icons(),
     )
 
     # -- Per-user Domo access token cache for native PDP enforcement --
