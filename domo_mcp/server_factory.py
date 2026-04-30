@@ -11,6 +11,7 @@ from typing import Any
 from fastmcp import FastMCP
 from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
 from fastmcp.server.middleware.middleware import CallNext, MiddlewareContext
+from mcp.types import Icon
 from pydantic import ValidationError
 
 from .code_executor import execute as _execute_code
@@ -90,6 +91,14 @@ def create_server(auth=None) -> FastMCP:
         appropriate tool based on what the user is asking for.""",
         auth=auth,
         lifespan=lifespan,
+        website_url="https://www.domo.com",
+        icons=[
+            Icon(
+                src="https://upload.wikimedia.org/wikipedia/commons/d/d1/Domo_logo.svg",
+                mimeType="image/svg+xml",
+                sizes=["any"],
+            ),
+        ],
     )
 
     # -- Per-user Domo access token cache for native PDP enforcement --
