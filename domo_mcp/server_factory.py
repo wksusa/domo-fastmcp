@@ -18,9 +18,9 @@ from pydantic import ValidationError
 
 from .code_executor import execute as _execute_code
 from .domo import DomoClient, DomoRequestError
-from .resources import python_env as _python_env_resource
 from .identity import get_user_email, is_jwt_auth
 from .logger import Logger
+from .resources import python_env as _python_env_resource
 from .user_resolver import UserResolver
 from .validation import (
     CreateRoleInput,
@@ -487,8 +487,8 @@ def create_server(auth=None) -> FastMCP:
         Args:
             code: Python source to execute. Either `print()` values, or end with
                   a bare expression — its repr() is auto-printed REPL-style.
-                  The following names are pre-bound — do NOT write `import`
-                  statements for them, just use them directly:
+                  The following names are pre-bound and ready to use directly
+                  (re-importing them is allowed but redundant):
                     - pd (pandas), np (numpy)
                     - json, math, statistics, collections, decimal, datetime, re
                   The `data` variable holds the parsed input. Imports of any

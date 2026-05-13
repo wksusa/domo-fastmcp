@@ -11,15 +11,16 @@ import ast
 import builtins
 import collections
 import contextlib
-import datetime as _datetime_module
+import datetime as _datetime_module  # aliased so the sandbox can expose "datetime"
 import decimal
 import io
 import json
 import math
-import re as _re_module
+import re as _re_module  # aliased so the sandbox can expose "re"
 import statistics
 import textwrap
 import time
+import types
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 
 MAX_CODE_LENGTH = 8_000   # characters
@@ -157,11 +158,11 @@ def _user_line_from_traceback(exc: BaseException) -> int | None:
     return line
 
 
-def _compile_split(code: str):
+def _compile_split(code: str) -> tuple[types.CodeType, types.CodeType | None]:
     """Parse `code` and split off the last bare-expression node if present.
 
     Returns (prefix_code_obj, last_expr_code_obj | None). Raises SyntaxError
-    on parse failure — callers should catch and fall back.
+    on parse failure — callers should catch and report the error.
     """
     tree = ast.parse(code, filename="<analyst>", mode="exec")
     if tree.body and isinstance(tree.body[-1], ast.Expr):
@@ -243,7 +244,7 @@ def _run_in_thread(code: str, data: object) -> dict:
     execution_ms = int((time.monotonic() - start) * 1000)
 
     if error_type is not None:
-        result: dict = {
+        result = {
             "ok": False,
             "error_type": error_type,
             "error_message": error_message,

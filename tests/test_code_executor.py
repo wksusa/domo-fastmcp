@@ -2,8 +2,8 @@
 
 import inspect
 import json
-import re as _re
-import textwrap as _textwrap
+import re
+import textwrap
 
 import pytest
 
@@ -356,17 +356,17 @@ class TestRunPythonResponse:
 
 def _extract_docstring_examples(docstring: str) -> list[str]:
     """Pull each `code = '''...'''` block out of the run_python docstring."""
-    blocks = _re.findall(r"code\s*=\s*'''(.*?)'''", docstring, _re.DOTALL)
-    return [_textwrap.dedent(b).strip("\n") for b in blocks]
+    blocks = re.findall(r"code\s*=\s*'''(.*?)'''", docstring, re.DOTALL)
+    return [textwrap.dedent(b).strip("\n") for b in blocks]
 
 
 def _run_python_docstring() -> str:
     """Find the run_python tool's docstring without instantiating a server."""
     source = inspect.getsource(server_factory.create_server)
-    m = _re.search(
+    m = re.search(
         r'async def run_python\([^)]*\)\s*->\s*str:\s*"""(.*?)"""',
         source,
-        _re.DOTALL,
+        re.DOTALL,
     )
     assert m, "Could not locate run_python docstring"
     return m.group(1)
