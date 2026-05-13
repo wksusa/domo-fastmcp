@@ -7,16 +7,16 @@ import traceback
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any
+from typing import Annotated, Any
 
 from fastmcp import FastMCP
 from fastmcp.server.middleware.logging import StructuredLoggingMiddleware
-from fastmcp.server.middleware.middleware import CallNext, MiddlewareContext
+from fastmcp.server.middleware.middleware import MiddlewareContext
 from fastmcp.utilities.types import Image
 from mcp.types import Icon
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
-from .code_executor import execute as _execute_code
+from .code_executor import _error_result, execute as _execute_code
 from .domo import DomoClient, DomoRequestError
 from .identity import get_user_email, is_jwt_auth
 from .logger import Logger
@@ -477,7 +477,19 @@ def create_server(auth=None) -> FastMCP:
         return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
 
     @mcp.tool()
-    async def run_python(code: str, data: Any = None) -> str:
+    async def run_python(
+        code: str,
+        data: Annotated[
+            list | dict | str | None,
+            Field(
+                description=(
+                    "Input data, available in `code` as the `data` variable. "
+                    "Preferred: pass a native list or dict (no JSON round-trip). "
+                    "Also accepted: a JSON string (parsed before execution) or null."
+                ),
+            ),
+        ] = None,
+    ) -> str:
         """Execute Python code to compute analytics on data returned by query_dataset.
 
         Use this after fetching data with query_dataset when you need calculations
@@ -498,19 +510,19 @@ def create_server(auth=None) -> FastMCP:
                   nothing if `code` doesn't need input data.
 
         Returns:
-            A JSON string. On success:
-              {"ok": true, "stdout": "...", "stderr": "", "truncated": false,
-               "original_length": N, "execution_ms": N, "data_summary": "..."}
-            On failure:
-              {"ok": false, "error_type": "KeyError", "error_message": "'foo'",
-               "line": 7, "stdout": "...partial output...", "execution_ms": N}
+            A JSON string with the same key set on success and error:
+              ok, stdout, stderr, truncated, original_length, execution_ms,
+              data_summary, plus error_type / error_message / line (null on
+              success). Branch on `ok` before reading the rest.
 
-        See the `python://env` resource for the full runtime environment listing.
+        Note: `query_dataset` returns column-oriented data
+        (`{columns, rows, ...}`). Convert to a list of dicts before treating
+        `data` as a list of rows — see the "Reshape from query_dataset"
+        section of the `python://env` resource for the snippet.
 
-        Example 1 (pandas):
+        Example 1 (pandas, with rows already shaped as list of dicts):
             code = '''
-            rows = data  # list of dicts from query_dataset
-            df = pd.DataFrame(rows)
+            df = pd.DataFrame(data)
             df["change"] = df["FY2025"] - df["FY2024"]
             df["change_pct"] = (df["change"] / df["FY2024"] * 100).round(1)
             print(df.to_string(index=False))
@@ -525,6 +537,8 @@ def create_server(auth=None) -> FastMCP:
             '''
             data = [{"category": "A"}, {"category": "B"}, {"category": "A"}, ...]
         """
+        # Pydantic validates `data` against `list | dict | str | None` before
+        # we get here, so we only need to handle the JSON-string parse step.
         parsed_data: object
         if data is None or data == "":
             parsed_data = None
@@ -532,33 +546,29 @@ def create_server(auth=None) -> FastMCP:
             try:
                 parsed_data = json.loads(data)
             except json.JSONDecodeError as e:
-                return json.dumps({
-                    "ok": False,
-                    "error_type": "JSONDecodeError",
-                    "error_message": f"Invalid JSON in data argument: {e}",
-                    "line": None,
-                    "stdout": "",
-                    "execution_ms": 0,
-                })
-        elif isinstance(data, (list, dict)):
-            parsed_data = data
+                return json.dumps(_error_result(
+                    "JSONDecodeError",
+                    f"Invalid JSON in data argument: {e}",
+                ))
         else:
-            return json.dumps({
-                "ok": False,
-                "error_type": "TypeError",
-                "error_message": (
-                    f"data must be a list, dict, JSON string, or null; "
-                    f"got {type(data).__name__}"
-                ),
-                "line": None,
-                "stdout": "",
-                "execution_ms": 0,
-            })
+            # list or dict — already validated by Pydantic
+            parsed_data = data
 
         logger.info(f"run_python: executing {len(code)} chars of code")
         result = _execute_code(code, parsed_data)
         logger.info(f"run_python: output length={result.get('original_length', 0)}")
-        return json.dumps(result)
+        try:
+            return json.dumps(result)
+        except (TypeError, ValueError) as e:
+            # Result contained a value json.dumps can't serialize (e.g.
+            # surrogate-escaped bytes leaked through stdout/stderr). Return
+            # a structured error rather than letting the exception reach
+            # the MCP layer as an unhandled tool failure.
+            return json.dumps(_error_result(
+                "SerializationError",
+                f"result could not be serialized: {e}",
+                execution_ms=result.get("execution_ms", 0),
+            ))
 
     # Token management (list/create/delete access tokens) is NOT exposed as MCP tools.
     # DomoClient methods are used internally by _get_user_token / _invalidate_user_token

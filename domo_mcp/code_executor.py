@@ -126,6 +126,33 @@ NO_OUTPUT_HINT = (
 )
 
 
+def _error_result(
+    error_type: str,
+    message: str,
+    *,
+    line: int | None = None,
+    stdout: str = "",
+    stderr: str = "",
+    truncated: bool = False,
+    original_length: int = 0,
+    execution_ms: int = 0,
+    data_summary: str | None = None,
+) -> dict:
+    """Canonical error result. All error paths share this shape."""
+    return {
+        "ok": False,
+        "error_type": error_type,
+        "error_message": message,
+        "line": line,
+        "stdout": stdout,
+        "stderr": stderr,
+        "truncated": truncated,
+        "original_length": original_length,
+        "execution_ms": execution_ms,
+        "data_summary": data_summary,
+    }
+
+
 def _summarize_data(data: object) -> str | None:
     """Return a short human-readable summary of `data`, or None to omit."""
     if data is None:
@@ -231,7 +258,13 @@ def _run_in_thread(code: str, data: object) -> dict:
                     value = eval(last_obj, namespace)  # noqa: S307
                     if value is not None:
                         print(repr(value))
-            except Exception as exc:
+            except BaseException as exc:
+                # Catch BaseException so SystemExit, user-constructed
+                # BaseException subclasses, etc. can't take down a worker
+                # thread. KeyboardInterrupt is re-raised so process-level
+                # interrupts still work.
+                if isinstance(exc, KeyboardInterrupt):
+                    raise
                 error_type = type(exc).__name__
                 error_message = str(exc)
                 error_line = _user_line_from_traceback(exc)
@@ -242,35 +275,33 @@ def _run_in_thread(code: str, data: object) -> dict:
     truncated = original_length > MAX_OUTPUT_LENGTH
     stdout = raw_stdout[:MAX_OUTPUT_LENGTH] if truncated else raw_stdout
     execution_ms = int((time.monotonic() - start) * 1000)
+    data_summary = _summarize_data(data)
 
     if error_type is not None:
-        result = {
-            "ok": False,
-            "error_type": error_type,
-            "error_message": error_message,
-            "line": error_line,
-            "stdout": stdout,
-            "execution_ms": execution_ms,
-        }
-        if err:
-            result["stderr"] = err
-        return result
+        return _error_result(
+            error_type,
+            error_message or "",
+            line=error_line,
+            stdout=stdout,
+            stderr=err,
+            truncated=truncated,
+            original_length=original_length,
+            execution_ms=execution_ms,
+            data_summary=data_summary,
+        )
 
     if not stdout:
         stdout = NO_OUTPUT_HINT
 
-    result = {
+    return {
         "ok": True,
         "stdout": stdout,
         "stderr": err,
         "truncated": truncated,
         "original_length": original_length,
         "execution_ms": execution_ms,
+        "data_summary": data_summary,
     }
-    summary = _summarize_data(data)
-    if summary is not None:
-        result["data_summary"] = summary
-    return result
 
 
 def execute(code: str, data: object = None) -> dict:
@@ -287,14 +318,10 @@ def execute(code: str, data: object = None) -> dict:
         `error_message`, `line`, partial `stdout`, `execution_ms`).
     """
     if len(code) > MAX_CODE_LENGTH:
-        return {
-            "ok": False,
-            "error_type": "CodeTooLong",
-            "error_message": f"code too long ({len(code)} chars, max {MAX_CODE_LENGTH})",
-            "line": None,
-            "stdout": "",
-            "execution_ms": 0,
-        }
+        return _error_result(
+            "CodeTooLong",
+            f"code too long ({len(code)} chars, max {MAX_CODE_LENGTH})",
+        )
 
     # Dedent so Claude can indent its code naturally inside a JSON string
     code = textwrap.dedent(code)
@@ -304,20 +331,15 @@ def execute(code: str, data: object = None) -> dict:
         return future.result(timeout=EXEC_TIMEOUT)
     except FuturesTimeoutError:
         future.cancel()
-        return {
-            "ok": False,
-            "error_type": "Timeout",
-            "error_message": f"execution timed out after {EXEC_TIMEOUT}s",
-            "line": None,
-            "stdout": "",
-            "execution_ms": int(EXEC_TIMEOUT * 1000),
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "error_type": type(exc).__name__,
-            "error_message": str(exc),
-            "line": None,
-            "stdout": "",
-            "execution_ms": 0,
-        }
+        return _error_result(
+            "Timeout",
+            f"execution timed out after {EXEC_TIMEOUT}s",
+            execution_ms=int(EXEC_TIMEOUT * 1000),
+        )
+    except BaseException as exc:
+        # KeyboardInterrupt is re-raised so Ctrl-C in dev still works;
+        # everything else (SystemExit, custom BaseException subclasses,
+        # ordinary Exception) becomes a structured error response.
+        if isinstance(exc, KeyboardInterrupt):
+            raise
+        return _error_result(type(exc).__name__, str(exc))

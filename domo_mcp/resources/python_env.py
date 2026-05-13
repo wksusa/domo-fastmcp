@@ -8,7 +8,17 @@ from __future__ import annotations
 
 from fastmcp import FastMCP
 
+from ..code_executor import EXEC_TIMEOUT, MAX_CODE_LENGTH, MAX_OUTPUT_LENGTH
+
 URI = "python://env"
+
+_LIMITS = f"""\
+- **Code size**: {MAX_CODE_LENGTH:,} characters max.
+- **Output size**: {MAX_OUTPUT_LENGTH:,} characters max. Larger output is truncated — the
+  response sets `truncated: true` and `original_length` reports the pre-truncation
+  length so you know how much was dropped.
+- **Execution time**: {EXEC_TIMEOUT:g} seconds per call. Beyond that you get an error with
+  `error_type: "Timeout"`."""
 
 _CONTENT = """\
 # `run_python` runtime environment
@@ -78,14 +88,29 @@ The `data` parameter to `run_python` accepts either:
 When `data` is non-empty, the response includes a `data_summary` field that
 describes its shape (e.g., `"list of 480 items; sample keys: ['x', 'y']"`).
 
+### Reshape from `query_dataset`
+
+`query_dataset` returns a column-oriented payload:
+
+```
+{"columns": [{"name": "...", "type": "..."}, ...],
+ "rows": [["val", "val", ...], ...],
+ "numRows": N, "numColumns": N}
+```
+
+If you pass that directly as `data`, `pd.DataFrame(data)` and `data[0]["col"]`
+will both fail. Convert to a list of dicts first — either before the call or
+inside `code`:
+
+```python
+cols = [c["name"] for c in data["columns"]]
+rows = [dict(zip(cols, r)) for r in data["rows"]]
+df = pd.DataFrame(rows)
+```
+
 ## Limits
 
-- **Code size**: 8,000 characters max.
-- **Output size**: 20,000 characters max. Larger output is truncated — the
-  response sets `truncated: true` and `original_length` reports the pre-truncation
-  length so you know how much was dropped.
-- **Execution time**: 15 seconds per call. Beyond that you get an error with
-  `error_type: "Timeout"`.
+{limits}
 
 ## What's blocked
 
@@ -114,6 +139,8 @@ for category, n in counts.most_common(5):
     print(f"{category}: {n}")
 ```
 """
+
+_CONTENT = _CONTENT.replace("{limits}", _LIMITS)
 
 
 def register(mcp: FastMCP) -> None:

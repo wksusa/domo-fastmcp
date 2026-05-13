@@ -250,9 +250,10 @@ class TestDataSummary:
         assert result["ok"] is True
         assert "dict with 2 keys" in result["data_summary"]
 
-    def test_none_data_omits_summary(self):
+    def test_none_data_summary_is_null(self):
+        """When data is None, data_summary is present but null (stable key set)."""
         result = execute("print('hi')", data=None)
-        assert "data_summary" not in result
+        assert result["data_summary"] is None
 
     def test_empty_list_does_not_index(self):
         result = execute("print(len(data))", data=[])
@@ -324,10 +325,10 @@ class TestRunPythonResponse:
         assert payload["stdout"].strip() == "1"
         assert "dict with 2 keys" in payload["data_summary"]
 
-    async def test_empty_data_omits_summary(self, server):
+    async def test_empty_data_summary_is_null(self, server):
         payload = await _call_run_python(server, code="print('hi')", data="")
         assert payload["ok"] is True
-        assert "data_summary" not in payload
+        assert payload["data_summary"] is None
 
     async def test_runtime_error_returns_structured_error(self, server):
         payload = await _call_run_python(server, code="1/0")
@@ -343,10 +344,17 @@ class TestRunPythonResponse:
         assert payload["error_type"] == "JSONDecodeError"
 
     async def test_unsupported_data_type(self, server):
-        payload = await _call_run_python(server, code="print(data)", data=42)
-        assert payload["ok"] is False
-        assert payload["error_type"] == "TypeError"
-        assert "list, dict, JSON string, or null" in payload["error_message"]
+        """Pydantic rejects an unsupported `data` type at the MCP boundary.
+
+        The tool body's defensive TypeError branch is unreachable now that
+        the parameter has a real union schema — the call never reaches it.
+        We verify the rejection surfaces as a tool-call error instead of a
+        structured `{ok: false}` response.
+        """
+        with pytest.raises(Exception) as exc_info:
+            await server.call_tool("run_python", {"code": "print(data)", "data": 42})
+        message = str(exc_info.value)
+        assert "validation" in message.lower() or "type" in message.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -363,8 +371,10 @@ def _extract_docstring_examples(docstring: str) -> list[str]:
 def _run_python_docstring() -> str:
     """Find the run_python tool's docstring without instantiating a server."""
     source = inspect.getsource(server_factory.create_server)
+    # The signature may span multiple lines (Annotated unions etc.), so match
+    # up to the `-> str:` arrow rather than balancing the parens.
     m = re.search(
-        r'async def run_python\([^)]*\)\s*->\s*str:\s*"""(.*?)"""',
+        r'async def run_python\b.*?->\s*str:\s*"""(.*?)"""',
         source,
         re.DOTALL,
     )
@@ -402,3 +412,221 @@ class TestRunPythonDocstring:
         result = execute(code, data)
         assert result["ok"] is True, result.get("error_message")
         assert "A: 3" in result["stdout"]
+
+
+# ---------------------------------------------------------------------------
+# Unit H: Test backfill — coverage gaps surfaced by the code review.
+# ---------------------------------------------------------------------------
+
+
+class TestStableResponseShape:
+    """Success and error responses share the same key set."""
+
+    _expected_keys = {
+        "ok",
+        "stdout",
+        "stderr",
+        "truncated",
+        "original_length",
+        "execution_ms",
+        "data_summary",
+    }
+    _error_extra = {"error_type", "error_message", "line"}
+
+    def test_success_shape_keys(self):
+        result = execute("print('hi')")
+        assert self._expected_keys.issubset(result.keys())
+
+    def test_error_shape_keys(self):
+        result = execute("1/0")
+        assert self._expected_keys.issubset(result.keys())
+        assert self._error_extra.issubset(result.keys())
+
+
+class TestErrorPathRetainsTruncationMetadata:
+    """Error result must carry the same truncation fields as success."""
+
+    def test_partial_stdout_on_runtime_error(self):
+        result = execute("print('first')\nprint('second')\n1/0")
+        assert result["ok"] is False
+        assert result["error_type"] == "ZeroDivisionError"
+        assert result["line"] == 3
+        assert "first" in result["stdout"] and "second" in result["stdout"]
+        assert result["truncated"] is False
+        assert result["original_length"] > 0
+
+    def test_truncated_stdout_on_error(self):
+        code = f"print('x' * {MAX_OUTPUT_LENGTH + 1000})\n1/0"
+        result = execute(code)
+        assert result["ok"] is False
+        assert result["truncated"] is True
+        assert result["original_length"] > MAX_OUTPUT_LENGTH
+        assert len(result["stdout"]) == MAX_OUTPUT_LENGTH
+
+
+class TestBaseExceptionHandling:
+    """User code raising BaseException subclasses must not crash a worker.
+
+    SystemExit itself isn't reachable from inside the sandbox (it's not in
+    _SAFE_BUILTINS), but a user can synthesise a direct BaseException
+    subclass via `type() + Exception.__bases__[0]`. That's the realistic
+    attack vector and the path we need to guard.
+    """
+
+    def test_user_constructed_base_exception(self):
+        code = "E = type('E', (Exception.__bases__[0],), {})\nraise E('boom')"
+        result = execute(code)
+        assert result["ok"] is False
+        assert result["error_type"] == "E"
+        assert "boom" in result["error_message"]
+
+
+class TestSubmoduleImportBlocking:
+    """`from X import Y` is blocked when X is not allowlisted."""
+
+    @pytest.mark.parametrize(
+        "code",
+        [
+            "from os import path",
+            "from subprocess import run",
+            "from urllib import request",
+        ],
+    )
+    def test_from_import_blocked(self, code):
+        result = execute(code)
+        assert result["ok"] is False
+        assert result["error_type"] == "ImportError"
+        assert "not allowed in sandbox" in result["error_message"]
+
+
+class TestFalsyAutoPrint:
+    """Auto-print fires for any non-None value, including falsy ones."""
+
+    @pytest.mark.parametrize(
+        "expr,expected",
+        [
+            ("0", "0\n"),
+            ("[]", "[]\n"),
+            ("False", "False\n"),
+            ("''", "''\n"),
+            ("0.0", "0.0\n"),
+            ("{}", "{}\n"),
+        ],
+    )
+    def test_falsy_value_is_auto_printed(self, expr, expected):
+        result = execute(expr)
+        assert result["ok"] is True
+        assert result["stdout"] == expected
+
+
+class TestSummarizeDataFallback:
+    """Non-list, non-dict data still gets a summary."""
+
+    def test_tuple_summary(self):
+        result = execute("print(data)", data=(1, 2, 3))
+        # Pydantic doesn't sit between execute() and the user — direct calls accept any type.
+        assert result["ok"] is True
+        assert result["data_summary"].startswith("tuple")
+
+    def test_scalar_summary(self):
+        result = execute("print(data)", data=42)
+        assert result["ok"] is True
+        assert result["data_summary"].startswith("int")
+        assert "42" in result["data_summary"]
+
+    def test_long_repr_truncated_to_80(self):
+        # A string longer than 80 chars exercises the truncation branch.
+        long_string = "x" * 200
+        result = execute("print(len(data))", data=long_string)
+        assert result["ok"] is True
+        # data_summary is "str: 'xxx...'" — the inner repr is truncated.
+        assert len(result["data_summary"]) < 200
+        assert result["data_summary"].endswith("...")
+
+
+class TestTimeoutPath:
+    """execute() returns a structured Timeout result when work overruns.
+
+    We mock the executor's future rather than actually running an infinite
+    loop — the production code path's `future.cancel()` does NOT stop a
+    running thread (a known pre-existing limitation tracked in the sandbox-
+    escape Linear issue). A real infinite loop would leak a thread and hang
+    pytest teardown.
+    """
+
+    def test_future_timeout_returns_structured_error(self, monkeypatch):
+        from concurrent.futures import TimeoutError as FuturesTimeoutError
+
+        from domo_mcp import code_executor
+
+        class _FakeFuture:
+            def result(self, timeout=None):
+                raise FuturesTimeoutError()
+
+            def cancel(self):
+                return True
+
+        monkeypatch.setattr(code_executor._executor, "submit", lambda *a, **kw: _FakeFuture())
+        result = execute("print('does not matter')")
+        assert result["ok"] is False
+        assert result["error_type"] == "Timeout"
+        assert "timed out" in result["error_message"]
+        assert result["execution_ms"] > 0
+
+
+class TestCrossRequestModuleIsolation:
+    """REGRESSION CAPTURE — currently FAILS because the sandbox allows
+    cross-request module mutation via setattr on shared singletons. When this
+    test starts passing, the pre-existing P0 sandbox-escape issue is fixed.
+    Marked xfail so it doesn't block CI but still runs and reports state.
+    """
+
+    @pytest.mark.xfail(
+        reason="Pre-existing sandbox escape: setattr persists across requests. "
+        "See the P0 Linear issue tracking the sandbox-hardening work.",
+        strict=False,
+    )
+    def test_math_pi_not_mutated_across_calls(self):
+        import math as _real_math
+        original_pi = _real_math.pi
+        try:
+            execute("setattr(math, 'pi', 999.0)")
+            result = execute("print(math.pi)")
+            assert result["stdout"].strip() == str(original_pi)
+        finally:
+            _real_math.pi = original_pi  # type: ignore[misc]
+
+
+class TestSyntaxErrorLineNumber:
+    """SyntaxError reports the user's line, not None."""
+
+    def test_simple_syntax_error_has_line(self):
+        result = execute("def foo(")
+        assert result["ok"] is False
+        assert result["error_type"] == "SyntaxError"
+        assert result["line"] == 1
+
+    def test_multi_line_syntax_error_has_line(self):
+        # The unmatched paren is on line 3.
+        result = execute("x = 1\ny = 2\nz = (\n")
+        assert result["ok"] is False
+        assert result["error_type"] == "SyntaxError"
+        assert result["line"] is not None
+        assert result["line"] >= 3
+
+
+class TestSerializationFallback:
+    """run_python returns a SerializationError when the result dict can't json.dumps."""
+
+    async def test_unserializable_result_returns_error(self, server, monkeypatch):
+        # Inject a non-serializable value into the executor's return.
+        def broken_execute(code, data=None):
+            return {"ok": True, "stdout": object(), "execution_ms": 1}
+
+        monkeypatch.setattr(
+            "domo_mcp.server_factory._execute_code", broken_execute
+        )
+        payload = await _call_run_python(server, code="print(1)")
+        assert payload["ok"] is False
+        assert payload["error_type"] == "SerializationError"
+        assert "could not be serialized" in payload["error_message"]
