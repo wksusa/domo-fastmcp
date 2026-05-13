@@ -229,20 +229,80 @@ class TestDomoClientMethods:
     async def test_query_dataset(
         self, dev_token_env, mock_logger, sample_query_response
     ):
-        """query_dataset should POST SQL to correct endpoint."""
+        """query_dataset should POST SQL to the execute endpoint and return the JSON body."""
         client = DomoClient(mock_logger)
 
+        mock_response = AsyncMock()
+        mock_response.status_code = 200
+        mock_response.content = b'{"rows": []}'
+        mock_response.json = lambda: sample_query_response
+
         with patch.object(
-            client, "make_request", new_callable=AsyncMock
-        ) as mock_request:
-            mock_request.return_value = sample_query_response
+            client._http_client, "post", new_callable=AsyncMock
+        ) as mock_post:
+            mock_post.return_value = mock_response
 
             result = await client.query_dataset("test-id", "SELECT * FROM table")
 
-        mock_request.assert_called_once_with(
-            "/query/v1/execute/test-id", "POST", data={"sql": "SELECT * FROM table"}
-        )
         assert result == sample_query_response
+        mock_post.assert_called_once()
+        call_args = mock_post.call_args
+        assert "/query/v1/execute/test-id" in call_args[0][0]
+        assert call_args.kwargs["json"] == {"sql": "SELECT * FROM table"}
+
+    @pytest.mark.asyncio
+    async def test_query_dataset_surfaces_sql_error(self, dev_token_env, mock_logger):
+        """A 400 from Domo's SQL endpoint should be surfaced to the caller with the
+        actual error message + the failing SQL, not the old opaque
+        'Unable to execute query on the dataset.' string."""
+        client = DomoClient(mock_logger)
+
+        mock_response = AsyncMock()
+        mock_response.status_code = 400
+        mock_response.content = b'{"message": "Unknown column FooBar"}'
+        mock_response.text = '{"message": "Unknown column FooBar"}'
+        mock_response.json = lambda: {
+            "status": 400,
+            "statusReason": "Bad Request",
+            "message": "Unknown column FooBar",
+        }
+
+        with patch.object(
+            client._http_client, "post", new_callable=AsyncMock
+        ) as mock_post:
+            mock_post.return_value = mock_response
+
+            result = await client.query_dataset("test-id", "SELECT FooBar FROM table")
+
+        assert isinstance(result, str)
+        assert "HTTP 400" in result
+        assert "Unknown column FooBar" in result
+        assert "SELECT FooBar FROM table" in result
+
+    @pytest.mark.asyncio
+    async def test_query_dataset_surfaces_403_as_access_denied(
+        self, dev_token_env, mock_logger
+    ):
+        """A 403 PDP refusal should produce a clear 'access denied' message that
+        tells the agent to pick a different dataset (not retry)."""
+        client = DomoClient(mock_logger)
+
+        mock_response = AsyncMock()
+        mock_response.status_code = 403
+        mock_response.content = b'{"message": "Forbidden"}'
+        mock_response.text = '{"message": "Forbidden"}'
+        mock_response.json = lambda: {"message": "Forbidden"}
+
+        with patch.object(
+            client._http_client, "post", new_callable=AsyncMock
+        ) as mock_post:
+            mock_post.return_value = mock_response
+
+            result = await client.query_dataset("test-id", "SELECT 1 FROM table")
+
+        assert isinstance(result, str)
+        assert "Access denied" in result
+        assert "test-id" in result
 
     @pytest.mark.asyncio
     async def test_search_datasets_dev_token(self, dev_token_env, mock_logger):
