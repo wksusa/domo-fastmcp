@@ -324,22 +324,94 @@ class DomoClient:
             return f"Error fetching dataset schema: {str(e)}"
 
     async def query_dataset(self, dataset_id: str, sql: str, *, override_token: str | None = None) -> dict | str:
-        """Query a Domo dataset using SQL."""
+        """Query a Domo dataset using SQL.
+
+        Bypasses make_request so HTTP error bodies (Domo SQL parse errors,
+        column-not-found, permission denied, etc.) are surfaced to the caller
+        instead of being swallowed and reported as a generic "unable to
+        execute query" string.
+        """
         url = f"/query/v1/execute/{dataset_id}"
+
         if override_token:
-            data = await self._request_with_override("POST", url, override_token, data={"sql": sql})
-            return data if data else "Unable to execute query on the dataset."
+            try:
+                data = await self._request_with_override(
+                    "POST", url, override_token, data={"sql": sql}
+                )
+            except DomoRequestError as e:
+                # Override path raises with status code but no body — pass that on.
+                if e.status_code == 403:
+                    return f"Access denied for dataset {dataset_id} (HTTP 403). This dataset is gated by PDP. Pick a different dataset."
+                return f"Domo query failed (HTTP {e.status_code}) on dataset {dataset_id}."
+            return data if data else "Domo returned an empty response."
+
+        headers = await self._get_headers()
+        full_url = f"{self.DOMO_API_BASE}{url}"
+        start_time = time.time()
+
         try:
-            data = await self.make_request(url, "POST", data={"sql": sql})
+            response = await self._http_client.post(full_url, headers=headers, json={"sql": sql})
+            duration = time.time() - start_time
 
-            if not data:
-                self.logger.warning("No data returned for dataset query.")
-                return "Unable to execute query on the dataset."
+            if response.status_code >= 400:
+                # Domo returns JSON like
+                #   {"status":400, "statusReason":"Bad Request",
+                #    "message":"...","toe":"...", ...}
+                # Surface the message text so the agent can fix its SQL.
+                msg: str
+                try:
+                    body = response.json()
+                    msg = (
+                        body.get("message")
+                        or body.get("error")
+                        or body.get("statusReason")
+                        or (response.text or "").strip()
+                        or f"HTTP {response.status_code}"
+                    )
+                except Exception:
+                    msg = (response.text or "").strip() or f"HTTP {response.status_code}"
 
-            return data
+                self.logger.warning(
+                    f"Domo query failed: status={response.status_code} "
+                    f"dataset={dataset_id} duration={duration:.2f}s message={msg!r}"
+                )
+
+                if response.status_code == 403:
+                    return (
+                        f"Access denied (HTTP 403) for dataset {dataset_id}. "
+                        f"This dataset is gated by PDP. Pick a different dataset."
+                    )
+
+                return (
+                    f"Domo query failed (HTTP {response.status_code}): {msg}\n"
+                    f"Dataset: {dataset_id}\n"
+                    f"Failed SQL: {sql}"
+                )
+
+            if duration > SLOW_REQUEST_THRESHOLD:
+                self.logger.warning(f"Slow query: dataset={dataset_id} duration={duration:.2f}s")
+            else:
+                self.logger.info(f"Query OK: dataset={dataset_id} duration={duration:.2f}s")
+
+            if not response.content:
+                return "Domo returned an empty response."
+
+            return response.json()
+        except httpx.TimeoutException as e:
+            duration = time.time() - start_time
+            self.logger.error(f"Query timeout after {duration:.2f}s: dataset={dataset_id} - {e}")
+            return (
+                f"Domo query timed out after {duration:.1f}s on dataset {dataset_id}. "
+                f"Try aggregating in SQL or adding a LIMIT before retrying."
+            )
+        except httpx.RequestError as e:
+            duration = time.time() - start_time
+            self.logger.error(f"Query network error after {duration:.2f}s: dataset={dataset_id} - {e}")
+            return f"Domo query network error on dataset {dataset_id}: {e}"
         except Exception as e:
-            self.logger.error(f"Error executing query on dataset: {str(e)}")
-            return f"Error executing query on dataset: {str(e)}"
+            duration = time.time() - start_time
+            self.logger.error(f"Unexpected query error after {duration:.2f}s: dataset={dataset_id} - {e}")
+            return f"Domo query unexpected error on dataset {dataset_id}: {e}"
 
     async def search_datasets(self, query: str, *, override_token: str | None = None) -> list | str:
         """Search for datasets in a Domo instance by name.
