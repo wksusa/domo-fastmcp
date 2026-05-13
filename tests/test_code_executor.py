@@ -261,6 +261,84 @@ class TestDataSummary:
         assert "list of 0 items" in result["data_summary"]
 
 
+class TestAutoReshapeColumnar:
+    """Auto-reshape `query_dataset` columnar payloads into list-of-row-dicts
+    before they reach user code. Removes the most common run_python footgun."""
+
+    def test_strings_columns_reshapes_to_dicts(self):
+        payload = {
+            "columns": ["LocationDesc", "Sales", "FoodCost"],
+            "rows": [
+                ["DEN 8741 Hobbs", 160810, 27516],
+                ["DEN 7569 LA",    193471, 33782],
+            ],
+            "numRows": 2,
+            "numColumns": 3,
+        }
+        result = execute("print(data[0]['LocationDesc'])", data=payload)
+        assert result["ok"] is True, result
+        assert "DEN 8741 Hobbs" in result["stdout"]
+        # data_summary should reflect the reshaped form.
+        assert "list of 2 items" in result["data_summary"]
+        assert "LocationDesc" in result["data_summary"]
+
+    def test_dict_columns_with_name_field_also_reshapes(self):
+        """Older/alt query_dataset payloads use [{name, type}, ...] for columns."""
+        payload = {
+            "columns": [
+                {"name": "LocationDesc", "type": "STRING"},
+                {"name": "Sales", "type": "DOUBLE"},
+            ],
+            "rows": [["DEN 8741", 160810.0]],
+        }
+        result = execute("print(data[0]['Sales'])", data=payload)
+        assert result["ok"] is True, result
+        assert "160810" in result["stdout"]
+
+    def test_pandas_dataframe_construct_works_directly(self):
+        pytest.importorskip("pandas")
+        payload = {
+            "columns": ["FiscalPrd", "FY2024", "FY2025"],
+            "rows": [[10, 2733551, 9895014]],
+        }
+        result = execute(
+            "df = pd.DataFrame(data); print(df['FY2025'].iloc[0])",
+            data=payload,
+        )
+        assert result["ok"] is True, result
+        assert "9895014" in result["stdout"]
+
+    def test_unfamiliar_shape_passes_through(self):
+        """If `columns` isn't strings-or-dicts-with-name, leave data alone."""
+        payload = {"columns": [1, 2, 3], "rows": [["a", "b", "c"]]}
+        result = execute("print(type(data).__name__); print(data['columns'])", data=payload)
+        assert result["ok"] is True
+        assert "dict" in result["stdout"]
+        # Original columns list survived.
+        assert "[1, 2, 3]" in result["stdout"]
+
+    def test_rows_not_all_lists_passes_through(self):
+        """Rows already shaped some other way (e.g. dicts) — don't touch."""
+        payload = {
+            "columns": ["a", "b"],
+            "rows": [{"a": 1, "b": 2}, {"a": 3, "b": 4}],
+        }
+        result = execute("print(type(data).__name__)", data=payload)
+        assert result["ok"] is True
+        assert "dict" in result["stdout"]
+
+    def test_plain_dict_passes_through(self):
+        """A non-columnar dict (no columns/rows) is left as-is."""
+        result = execute("print(data['key'])", data={"key": "value"})
+        assert result["ok"] is True
+        assert "value" in result["stdout"]
+
+    def test_plain_list_passes_through(self):
+        result = execute("print(data[0])", data=[{"a": 1}, {"a": 2}])
+        assert result["ok"] is True
+        assert "{'a': 1}" in result["stdout"]
+
+
 class TestExecuteCodeTooLong:
     """Boundary: oversize code returns CodeTooLong error."""
 

@@ -88,25 +88,28 @@ The `data` parameter to `run_python` accepts either:
 When `data` is non-empty, the response includes a `data_summary` field that
 describes its shape (e.g., `"list of 480 items; sample keys: ['x', 'y']"`).
 
-### Reshape from `query_dataset`
+### Pass `query_dataset` results directly
 
-`query_dataset` returns a column-oriented payload:
+`query_dataset` returns a column-oriented payload (either
+`{"columns": ["col1", ...], "rows": [[...], ...]}` or
+`{"columns": [{"name": "col1", ...}, ...], "rows": [[...], ...]}`).
 
-```
-{"columns": [{"name": "...", "type": "..."}, ...],
- "rows": [["val", "val", ...], ...],
- "numRows": N, "numColumns": N}
-```
-
-If you pass that directly as `data`, `pd.DataFrame(data)` and `data[0]["col"]`
-will both fail. Convert to a list of dicts first — either before the call or
-inside `code`:
+`run_python` **auto-reshapes** that payload into a list of row-dicts before
+binding it to `data`, so you can pass the whole `query_dataset` result through
+without converting it yourself. Inside `code`:
 
 ```python
-cols = [c["name"] for c in data["columns"]]
-rows = [dict(zip(cols, r)) for r in data["rows"]]
-df = pd.DataFrame(rows)
+df = pd.DataFrame(data)                # works
+first_loc = data[0]["LocationDesc"]    # works
 ```
+
+The `data_summary` in the response will reflect the reshaped form, e.g.
+`"list of 141 items; sample keys: ['LocationDesc', 'Sales', ...]"`.
+
+If you pass a raw list of lists (e.g. you sliced `result["rows"]` before the
+call), `run_python` cannot infer column names — you'll get back a list of
+positional lists. In that case pass the original payload instead, or pass a
+list of row-dicts you built yourself.
 
 ## Limits
 
