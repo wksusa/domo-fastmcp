@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from .code_executor import execute as _execute_code
 from .domo import DomoClient, DomoRequestError
+from .resources import python_env as _python_env_resource
 from .identity import get_user_email, is_jwt_auth
 from .logger import Logger
 from .user_resolver import UserResolver
@@ -476,7 +477,7 @@ def create_server(auth=None) -> FastMCP:
         return json.dumps(result, indent=2) if isinstance(result, (dict, list)) else str(result)
 
     @mcp.tool()
-    async def run_python(code: str, data: str = "") -> str:
+    async def run_python(code: str, data: Any = None) -> str:
         """Execute Python code to compute analytics on data returned by query_dataset.
 
         Use this after fetching data with query_dataset when you need calculations
@@ -484,42 +485,86 @@ def create_server(auth=None) -> FastMCP:
         percentage deltas, totals, averages, pivots, rankings, etc.
 
         Args:
-            code: Python source to execute. Use `print()` for all output — that's
-                  what gets returned. Available: pd (pandas), json, math, statistics,
-                  collections, decimal. The `data` variable holds parsed input data.
-                  No file, network, or OS access is allowed.
-            data: JSON string of data to operate on (e.g. the raw result from
-                  query_dataset). Available in code as `data` (already parsed).
+            code: Python source to execute. Either `print()` values, or end with
+                  a bare expression — its repr() is auto-printed REPL-style.
+                  The following names are pre-bound — do NOT write `import`
+                  statements for them, just use them directly:
+                    - pd (pandas), np (numpy)
+                    - json, math, statistics, collections, decimal, datetime, re
+                  The `data` variable holds the parsed input. Imports of any
+                  other module are blocked; no file, network, or OS access.
+            data: Input data, available in code as `data`. Accepts a native
+                  list/dict, or a JSON string (which will be parsed). Pass
+                  nothing if `code` doesn't need input data.
 
         Returns:
-            Captured stdout from the code, or an error message.
+            A JSON string. On success:
+              {"ok": true, "stdout": "...", "stderr": "", "truncated": false,
+               "original_length": N, "execution_ms": N, "data_summary": "..."}
+            On failure:
+              {"ok": false, "error_type": "KeyError", "error_message": "'foo'",
+               "line": 7, "stdout": "...partial output...", "execution_ms": N}
 
-        Example:
+        See the `python://env` resource for the full runtime environment listing.
+
+        Example 1 (pandas):
             code = '''
-            import json
             rows = data  # list of dicts from query_dataset
             df = pd.DataFrame(rows)
             df["change"] = df["FY2025"] - df["FY2024"]
             df["change_pct"] = (df["change"] / df["FY2024"] * 100).round(1)
             print(df.to_string(index=False))
             '''
-            data = '[{"FiscalPrd": 10, "FY2024": 2733551, "FY2025": 9895014}, ...]'
+            data = [{"FiscalPrd": 10, "FY2024": 2733551, "FY2025": 9895014}, ...]
+
+        Example 2 (plain Python, no pandas):
+            code = '''
+            counts = collections.Counter(row["category"] for row in data)
+            for category, n in counts.most_common(5):
+                print(f"{category}: {n}")
+            '''
+            data = [{"category": "A"}, {"category": "B"}, {"category": "A"}, ...]
         """
-        parsed_data: object = None
-        if data:
+        parsed_data: object
+        if data is None or data == "":
+            parsed_data = None
+        elif isinstance(data, str):
             try:
                 parsed_data = json.loads(data)
             except json.JSONDecodeError as e:
-                return json.dumps({"error": f"Invalid JSON in data argument: {e}"})
+                return json.dumps({
+                    "ok": False,
+                    "error_type": "JSONDecodeError",
+                    "error_message": f"Invalid JSON in data argument: {e}",
+                    "line": None,
+                    "stdout": "",
+                    "execution_ms": 0,
+                })
+        elif isinstance(data, (list, dict)):
+            parsed_data = data
+        else:
+            return json.dumps({
+                "ok": False,
+                "error_type": "TypeError",
+                "error_message": (
+                    f"data must be a list, dict, JSON string, or null; "
+                    f"got {type(data).__name__}"
+                ),
+                "line": None,
+                "stdout": "",
+                "execution_ms": 0,
+            })
 
         logger.info(f"run_python: executing {len(code)} chars of code")
         result = _execute_code(code, parsed_data)
-        logger.info(f"run_python: output length={len(result)}")
-        return result
+        logger.info(f"run_python: output length={result.get('original_length', 0)}")
+        return json.dumps(result)
 
     # Token management (list/create/delete access tokens) is NOT exposed as MCP tools.
     # DomoClient methods are used internally by _get_user_token / _invalidate_user_token
     # for per-user PDP token lifecycle. No external caller should mint or revoke tokens directly.
+
+    _python_env_resource.register(mcp)
 
     mcp.add_middleware(_ToolNameLoggingMiddleware(
         include_payloads=True,
