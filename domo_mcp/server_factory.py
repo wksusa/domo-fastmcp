@@ -516,26 +516,30 @@ def create_server(auth=None) -> FastMCP:
               success). Branch on `ok` before reading the rest.
 
         Note: `query_dataset` returns column-oriented data
-        (`{columns, rows, ...}`). Convert to a list of dicts before treating
-        `data` as a list of rows — see the "Reshape from query_dataset"
-        section of the `python://env` resource for the snippet.
+        (`{columns, rows, ...}`). `run_python` **auto-reshapes** that payload
+        into a list of row-dicts before binding it to `data`, so pass the
+        whole `query_dataset` result through unchanged — `pd.DataFrame(data)`
+        and `data[0]["col"]` both work. See the `python://env` resource for
+        the full contract.
 
-        Example 1 (pandas, with rows already shaped as list of dicts):
+        Example 1 (pandas — pass the whole query_dataset result):
             code = '''
             df = pd.DataFrame(data)
             df["change"] = df["FY2025"] - df["FY2024"]
             df["change_pct"] = (df["change"] / df["FY2024"] * 100).round(1)
             print(df.to_string(index=False))
             '''
-            data = [{"FiscalPrd": 10, "FY2024": 2733551, "FY2025": 9895014}, ...]
+            data = {"columns": ["FiscalPrd", "FY2024", "FY2025"],
+                    "rows": [[10, 2733551, 9895014], ...]}
 
-        Example 2 (plain Python, no pandas):
+        Example 2 (plain Python — same contract):
             code = '''
             counts = collections.Counter(row["category"] for row in data)
             for category, n in counts.most_common(5):
                 print(f"{category}: {n}")
             '''
-            data = [{"category": "A"}, {"category": "B"}, {"category": "A"}, ...]
+            data = {"columns": ["category", "n"],
+                    "rows": [["A", 1], ["B", 2], ["A", 3]]}
         """
         # Pydantic validates `data` against `list | dict | str | None` before
         # we get here, so we only need to handle the JSON-string parse step.

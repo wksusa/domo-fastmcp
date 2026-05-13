@@ -174,6 +174,47 @@ def _summarize_data(data: object) -> str | None:
     return f"{type(data).__name__}: {rep}"
 
 
+def _auto_reshape_columnar(data: object) -> object:
+    """If `data` looks like a `query_dataset` payload (columnar), reshape it
+    to a list-of-row-dicts so user code can do `pd.DataFrame(data)` and
+    `data[0]["col"]` without a manual reshape step.
+
+    Detected shape (columns can be bare strings OR dicts with a `name` field
+    — `query_dataset` has shipped both over time):
+        {"columns": list[str] | list[{name, ...}],
+         "rows":    list[list[Any]],
+         ...other keys ignored...}
+
+    Anything else passes through unchanged.
+    """
+    if not isinstance(data, dict):
+        return data
+    cols = data.get("columns")
+    rows = data.get("rows")
+    if not isinstance(cols, list) or not isinstance(rows, list):
+        return data
+    if not cols:
+        return data
+
+    col_names: list[str] = []
+    for c in cols:
+        if isinstance(c, str):
+            col_names.append(c)
+        elif isinstance(c, dict) and isinstance(c.get("name"), str):
+            col_names.append(c["name"])
+        else:
+            # Unfamiliar column shape — bail rather than guess.
+            return data
+
+    reshaped: list[dict] = []
+    for r in rows:
+        if not isinstance(r, list):
+            # Some rows already shaped differently — don't touch.
+            return data
+        reshaped.append(dict(zip(col_names, r)))
+    return reshaped
+
+
 def _user_line_from_traceback(exc: BaseException) -> int | None:
     """Walk the traceback and return the deepest user-frame line number."""
     tb = exc.__traceback__
@@ -325,6 +366,11 @@ def execute(code: str, data: object = None) -> dict:
 
     # Dedent so Claude can indent its code naturally inside a JSON string
     code = textwrap.dedent(code)
+
+    # Auto-reshape columnar query_dataset payloads to list-of-dicts so user
+    # code can rely on a uniform row-shaped contract (pd.DataFrame(data),
+    # data[0]["col"], etc.). No-op for any other shape.
+    data = _auto_reshape_columnar(data)
 
     future = _executor.submit(_run_in_thread, code, data)
     try:
