@@ -1,0 +1,11 @@
+# External-tool links for this project. See ~/wks/CLAUDE.md ("Project markers").
+# Harvested from this repo's `## Linear` block on 2026-07-06.
+# Print the workspace map:  bash ~/wks/claude-wks/bin/project-map.sh
+
+product: Domo MCP
+
+linear:
+  project: Domo MCP
+  id: c9b5ac3d-4ab7-4d57-9fa5-ace1875c666d
+  team: AI Labs
+  url: https://linear.app/wksusa/project/domo-mcp-88f1e5a32644
