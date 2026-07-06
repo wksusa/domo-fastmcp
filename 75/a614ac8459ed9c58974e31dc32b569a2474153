@@ -1,0 +1,19 @@
+.project/links.yaml
+  s_1554bdcd77bd80::t_82e89185a717cc 1-11
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "75a614ac8459ed9c58974e31dc32b569a2474153",
+  "prompts": {},
+  "sessions": {
+    "s_1554bdcd77bd80": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "bb859c72-ec92-4021-b4d9-83a4c9925cbe",
+        "model": "claude-opus-4-8"
+      },
+      "human_author": "Spencer Bean <ssbean@gmail.com>"
+    }
+  }
+}
