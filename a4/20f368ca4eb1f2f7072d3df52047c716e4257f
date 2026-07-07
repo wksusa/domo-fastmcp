@@ -1,0 +1,19 @@
+.project/links.yaml
+  s_7c3a72b444e58a::t_98eee10b083a4b 1,3
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.10",
+  "base_commit_sha": "a420f368ca4eb1f2f7072d3df52047c716e4257f",
+  "prompts": {},
+  "sessions": {
+    "s_7c3a72b444e58a": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "s_7c3a72b444e58a",
+        "model": "unknown"
+      },
+      "human_author": "Spencer Bean <ssbean@gmail.com>"
+    }
+  }
+}
