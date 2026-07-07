@@ -1,6 +1,6 @@
-# External-tool links for this project. See ~/wks/CLAUDE.md ("Project markers").
+# External-tool links for this project. See ~/wks/CLAUDE.md ("Linear conventions").
 # Harvested from this repo's `## Linear` block on 2026-07-06.
-# Print the workspace map:  bash ~/wks/claude-wks/bin/project-map.sh
+# Print the workspace map:  bash ~/wks/.claude-wks/bin/project-map.sh
 
 product: Domo MCP
 
