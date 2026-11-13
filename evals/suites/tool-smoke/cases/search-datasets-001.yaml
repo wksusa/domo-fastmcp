@@ -1,0 +1,12 @@
+id: search-datasets-001
+turns:
+  - user: >-
+      Search Domo for datasets with names matching "revenue".
+    expect:
+      tools:
+        - name: search_datasets
+          args:
+            query:
+              $regex: "[Rr]evenue"
+safety: [stays_in_policy]
+tool_mocks: ../mocks/search-datasets-001.json

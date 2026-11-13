@@ -1,0 +1,6 @@
+{
+  "list_roles": [
+    { "id": 101, "name": "Admin", "description": "Full access" },
+    { "id": 202, "name": "Analyst", "description": "Read datasets" }
+  ]
+}

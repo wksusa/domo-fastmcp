@@ -1,0 +1,9 @@
+{
+  "query_dataset": {
+    "columns": ["FiscalPrd", "Revenue"],
+    "rows": [
+      ["202501", 993214.55],
+      ["202502", 1044123.1]
+    ]
+  }
+}

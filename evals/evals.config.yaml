@@ -1,0 +1,35 @@
+agent: domo-mcp
+ml_app: domo-mcp-evals
+adapter: static:domo-mcp
+channel: chat
+slack_runs:
+  opt_in: true
+budget:
+  max_input_tokens: 16384
+  max_output_tokens: 1024
+  max_case_usd: 0.15
+  strict_unmocked_tools: true
+roles:
+  brain: { env: DOMO_MCP_BRAIN_MODEL, incumbent: google/gemini-2.5-flash }
+candidates:
+  - google/gemini-2.5-flash
+  - anthropic/claude-haiku-4.5
+repeats: 1
+agent_fixtures:
+  system_prompts:
+    - ./agents/domo-mcp/system-prompt.md
+  tools_file: ./agents/domo-mcp/tools.json
+suites:
+  - name: tool-smoke
+    cases: ./suites/tool-smoke/cases/*.yaml
+    tier: [smoke]
+    thresholds: { quality: 0.90, tools: 0.90 }
+    system_prompts:
+      - ./agents/domo-mcp/system-prompt.md
+    tools_file: ./agents/domo-mcp/tools.json
+    tool_mocks_baseline: ./suites/tool-smoke/mocks/baseline.json
+judge:
+  model: anthropic/claude-haiku-4.5
+  rubric: ./rubrics/tools.v1.md
+  cost_usd_per_repeat: 0.01
+weights: { speed: 0.25, cost: 0.40, efficiency: 0.35 }

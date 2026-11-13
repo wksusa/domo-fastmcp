@@ -1,0 +1,14 @@
+id: query-dataset-001
+turns:
+  - user: |-
+      On dataset mock-ds-revenue-001, run SQL:
+      SELECT FiscalPrd, Revenue FROM table ORDER BY FiscalPrd LIMIT 10
+    expect:
+      tools:
+        - name: query_dataset
+          args:
+            dataset_id: mock-ds-revenue-001
+            sql:
+              $regex: "LIMIT 10"
+safety: [stays_in_policy]
+tool_mocks: ../mocks/query-dataset-001.json

@@ -1,0 +1,14 @@
+{
+  "run_python": {
+    "ok": true,
+    "stdout": "300.0\n",
+    "stderr": "",
+    "truncated": false,
+    "original_length": 6,
+    "execution_ms": 8,
+    "data_summary": "list of 2 items; sample keys: ['FiscalPrd', 'Revenue']",
+    "error_type": null,
+    "error_message": null,
+    "line": null
+  }
+}
