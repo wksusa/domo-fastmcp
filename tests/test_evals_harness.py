@@ -57,6 +57,18 @@ def block_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.fixture
+def stub_domo_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DOMO_DEVELOPER_TOKEN", "eval-harness-stub")
+    monkeypatch.setenv("DOMO_HOST", "example.domo.com")
+    monkeypatch.delenv("DOMO_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DOMO_CLIENT_SECRET", raising=False)
+
+    import dotenv
+
+    monkeypatch.setattr(dotenv, "load_dotenv", lambda *_args, **_kwargs: None)
+
+
+@pytest.fixture
 def guard_domo_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     def blocked(*_args, **_kwargs):
         raise RuntimeError("Domo runtime must not load during eval export")
@@ -76,17 +88,26 @@ def guard_domo_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "domo_mcp.code_executor", code_stub)
 
 
+async def _export_production_openai_tools() -> list[dict]:
+    from domo_mcp.server_factory import create_server
+    from evals.lib.openai_tools import mcp_tool_to_openai
+
+    mcp = create_server(auth=None)
+    tools = await mcp.list_tools()
+    tools.sort(key=lambda t: t.name)
+    return [mcp_tool_to_openai(t) for t in tools]
+
+
 @pytest.mark.asyncio
 async def test_tools_json_matches_fastmcp(
     block_sockets: None,
-    guard_domo_runtime: None,
+    stub_domo_env: None,
 ) -> None:
+    """Committed tools.json must match the real FastMCP server tool surface."""
     _repo_on_path()
-    from evals.lib.openai_tools import export_openai_tools
-
-    exported = await export_openai_tools()
+    production = await _export_production_openai_tools()
     committed = _load_committed_tools()
-    assert exported == committed
+    assert production == committed
 
 
 def test_evals_config_strict_unmocked_tools() -> None:
