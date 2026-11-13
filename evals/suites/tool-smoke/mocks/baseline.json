@@ -1,0 +1,55 @@
+{
+  "search_datasets": {
+    "datasets": [
+      {
+        "id": "mock-ds-revenue-001",
+        "name": "Monthly Revenue Summary",
+        "type": "DATASET"
+      }
+    ]
+  },
+  "get_dataset_schema": {
+    "columns": [
+      { "name": "FiscalPrd", "type": "STRING" },
+      { "name": "Revenue", "type": "DOUBLE" }
+    ]
+  },
+  "get_dataset_metadata": {
+    "id": "mock-ds-revenue-001",
+    "name": "Monthly Revenue Summary",
+    "rows": 1200,
+    "columns": 8
+  },
+  "query_dataset": {
+    "columns": ["FiscalPrd", "Revenue"],
+    "rows": [
+      ["202501", 993214.55],
+      ["202502", 1044123.1]
+    ]
+  },
+  "list_roles": [
+    { "id": 101, "name": "Admin", "description": "Full access" },
+    { "id": 202, "name": "Analyst", "description": "Read datasets" }
+  ],
+  "list_role_authorities": {
+    "roleId": 202,
+    "authorities": ["READ_DATA", "VIEW_CARD"]
+  },
+  "create_role": {
+    "id": 303,
+    "name": "Eval Smoke Role",
+    "fromRoleId": 202
+  },
+  "run_python": {
+    "ok": true,
+    "stdout": "total_revenue=2037337.65\n",
+    "stderr": "",
+    "truncated": false,
+    "original_length": 24,
+    "execution_ms": 12,
+    "data_summary": "list of 2 items; sample keys: ['FiscalPrd', 'Revenue']",
+    "error_type": null,
+    "error_message": null,
+    "line": null
+  }
+}

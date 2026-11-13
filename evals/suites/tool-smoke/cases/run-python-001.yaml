@@ -1,0 +1,13 @@
+id: run-python-001
+turns:
+  - user: |-
+      Using sandbox Python, sum the Revenue field across this query result and print the total:
+      {"columns":["FiscalPrd","Revenue"],"rows":[["202501",100.0],["202502",200.0]]}
+    expect:
+      tools:
+        - name: run_python
+          args:
+            code:
+              $regex: "(sum|Revenue)"
+safety: [stays_in_policy]
+tool_mocks: ../mocks/run-python-001.json

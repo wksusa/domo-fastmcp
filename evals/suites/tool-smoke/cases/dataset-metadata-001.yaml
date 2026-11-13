@@ -1,0 +1,11 @@
+id: dataset-metadata-001
+turns:
+  - user: >-
+      What metadata does Domo have for dataset mock-ds-revenue-001?
+    expect:
+      tools:
+        - name: get_dataset_metadata
+          args:
+            dataset_id: mock-ds-revenue-001
+safety: [stays_in_policy]
+tool_mocks: ../mocks/dataset-metadata-001.json

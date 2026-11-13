@@ -1,0 +1,197 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "create_role",
+      "description": "Create a new role in the Domo instance.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "description": "The name of the new role."
+          },
+          "from_role_id": {
+            "type": "integer",
+            "description": "The role ID to copy permissions from."
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional description of the role."
+          }
+        },
+        "required": [
+          "name",
+          "from_role_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_dataset_metadata",
+      "description": "Get metadata for a Domo dataset.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dataset_id": {
+            "type": "string",
+            "description": "The ID of the dataset to get metadata for."
+          }
+        },
+        "required": [
+          "dataset_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "get_dataset_schema",
+      "description": "Get the schema of a Domo dataset.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dataset_id": {
+            "type": "string",
+            "description": "The ID of the dataset to get the schema for."
+          }
+        },
+        "required": [
+          "dataset_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_role_authorities",
+      "description": "List authorities (permissions) for a specific role in the Domo instance.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "role_id": {
+            "type": "integer",
+            "description": "The ID of the role to list authorities for."
+          }
+        },
+        "required": [
+          "role_id"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "list_roles",
+      "description": "List all roles in the Domo instance.",
+      "parameters": {
+        "type": "object",
+        "properties": {},
+        "required": [],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "query_dataset",
+      "description": "Query a Domo dataset using SQL.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "dataset_id": {
+            "type": "string",
+            "description": "The ID of the dataset to query."
+          },
+          "sql": {
+            "type": "string",
+            "description": "The SQL query to execute on the dataset."
+          }
+        },
+        "required": [
+          "dataset_id",
+          "sql"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "run_python",
+      "description": "Execute Python code to compute analytics on data returned by query_dataset.\n\nUse this after fetching data with query_dataset when you need calculations\nthat are more reliable in code than in your head: YoY change columns,\npercentage deltas, totals, averages, pivots, rankings, etc.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "description": "Python source to execute. Either `print()` values, or end with\n  a bare expression \u2014 its repr() is auto-printed REPL-style.\n  The following names are pre-bound and ready to use directly\n  (re-importing them is allowed but redundant):\n    - pd (pandas), np (numpy)\n    - json, math, statistics, collections, decimal, datetime, re\n  The `data` variable holds the parsed input. Imports of any\n  other module are blocked; no file, network, or OS access."
+          },
+          "data": {
+            "anyOf": [
+              {
+                "items": {},
+                "type": "array"
+              },
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Input data, available in `code` as the `data` variable. Preferred: pass a native list or dict (no JSON round-trip). Also accepted: a JSON string (parsed before execution) or null."
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "search_datasets",
+      "description": "Search for datasets in a Domo instance by name.\n\nNote: Domo's search API does not PDP-filter results. JWT users see all\ndatasets in search but get 403 or filtered rows when actually querying.",
+      "parameters": {
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "description": "The search query to find datasets by name."
+          }
+        },
+        "required": [
+          "query"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+]

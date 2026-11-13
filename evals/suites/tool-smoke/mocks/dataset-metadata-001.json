@@ -1,0 +1,8 @@
+{
+  "get_dataset_metadata": {
+    "id": "mock-ds-revenue-001",
+    "name": "Monthly Revenue Summary",
+    "rows": 1200,
+    "columns": 8
+  }
+}

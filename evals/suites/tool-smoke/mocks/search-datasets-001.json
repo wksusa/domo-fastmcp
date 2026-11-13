@@ -1,0 +1,11 @@
+{
+  "search_datasets": {
+    "datasets": [
+      {
+        "id": "mock-ds-revenue-001",
+        "name": "Monthly Revenue Summary",
+        "type": "DATASET"
+      }
+    ]
+  }
+}
